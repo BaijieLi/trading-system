@@ -17,6 +17,7 @@ load_dotenv()
 from kalshi_trading_system.collectors.kalshi_public import KalshiPublicClient  # noqa: E402
 from kalshi_trading_system.config import DEFAULT_SERIES, SETTINGS  # noqa: E402
 from kalshi_trading_system.execution.paper_broker import simulate_trade  # noqa: E402
+from kalshi_trading_system.models.discovery import DiscoveryConfig, discover_market_signals  # noqa: E402
 from kalshi_trading_system.models.edge import analyze_markets  # noqa: E402
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
@@ -33,12 +34,29 @@ st.set_page_config(page_title="Kalshi Trading Radar", page_icon="📈", layout="
 
 
 @st.cache_data(ttl=10, show_spinner=False)
-def load_signals(series: tuple[str, ...], max_markets: int) -> tuple[pd.DataFrame, int]:
+def load_signals(
+    series: tuple[str, ...],
+    max_markets: int,
+    discover: bool,
+    discovery_scan_limit: int,
+    discovery_candidates: int,
+    discovery_final_limit: int,
+) -> tuple[pd.DataFrame, int, dict[str, object]]:
     client = KalshiPublicClient()
+    if discover:
+        signals, metadata = discover_market_signals(
+            client,
+            DiscoveryConfig(
+                scan_limit=discovery_scan_limit,
+                candidate_limit=discovery_candidates,
+                final_limit=discovery_final_limit,
+            ),
+        )
+        return pd.DataFrame(signals), int(metadata.get("markets_seen") or 0), metadata
     markets = client.get_markets(series_tickers=list(series), max_markets=max_markets)
     enriched = client.enrich_with_orderbooks(markets)
     signals = analyze_markets(enriched)
-    return pd.DataFrame(signals), len(enriched)
+    return pd.DataFrame(signals), len(enriched), {"mode": "series"}
 
 
 @st.cache_data(ttl=5, show_spinner=False)
@@ -99,6 +117,35 @@ with st.sidebar:
         help="Comma-separated series tickers. Keep this small to protect memory and API usage.",
     )
     max_markets = st.slider("Max markets", min_value=5, max_value=50, value=min(SETTINGS.max_markets, 50), step=5)
+    discover = st.checkbox(
+        "Discover broader market universe",
+        value=False,
+        help="Scans open Kalshi markets, filters for liquid candidates, then ranks a smaller watchlist.",
+    )
+    discovery_scan_limit = st.slider(
+        "Discovery scan limit",
+        min_value=100,
+        max_value=3000,
+        value=min(SETTINGS.discovery_scan_limit, 1000),
+        step=100,
+        disabled=not discover,
+    )
+    discovery_candidates = st.slider(
+        "Discovery orderbooks",
+        min_value=20,
+        max_value=150,
+        value=min(SETTINGS.discovery_candidate_limit, 80),
+        step=10,
+        disabled=not discover,
+    )
+    discovery_final_limit = st.slider(
+        "Discovery watchlist",
+        min_value=10,
+        max_value=100,
+        value=min(SETTINGS.discovery_final_limit, 50),
+        step=10,
+        disabled=not discover,
+    )
     st.caption(f"Refresh target: {SETTINGS.refresh_seconds}s. Streamlit cache TTL: 10s.")
 
     heartbeat, latest_snapshot, monitor_runs = load_monitor_state()
@@ -129,13 +176,22 @@ series = tuple(item.strip() for item in series_text.split(",") if item.strip())
 manual_fair = parse_manual_fair(manual_text)
 
 with st.spinner("Loading public Kalshi markets and orderbooks..."):
-    df, scanned = load_signals(series, max_markets)
+    df, scanned, scan_metadata = load_signals(
+        series,
+        max_markets,
+        discover,
+        discovery_scan_limit,
+        discovery_candidates,
+        discovery_final_limit,
+    )
 
-if not df.empty and manual_fair:
+if not df.empty and manual_fair and not discover:
     # Recalculate only the displayed rows when manual overrides are entered.
     client = KalshiPublicClient()
     markets = client.enrich_with_orderbooks(client.get_markets(series_tickers=list(series), max_markets=max_markets))
     df = pd.DataFrame(analyze_markets(markets, manual_fair=manual_fair))
+elif manual_fair and discover:
+    st.info("Manual fair overrides are applied only in fixed-series mode. Discovery mode ranks the broad watchlist first.")
 
 if df.empty:
     st.error("No markets returned for the selected series.")
@@ -155,6 +211,10 @@ metric_cols[4].metric("memory MB", f"{process_memory_mb():.0f}")
 metric_cols[5].metric("paper only", "ON" if SETTINGS.paper_trading_only else "OFF")
 
 display_cols = [
+    "discovery_score",
+    "liquidity_score",
+    "quote_quality_score",
+    "series_ticker",
     "ticker",
     "title",
     "action",
@@ -235,8 +295,9 @@ with tab_monitor:
         )
         if snapshot_rows:
             snapshot_df = pd.DataFrame(snapshot_rows)
+            available_snapshot_cols = [col for col in display_cols if col in snapshot_df.columns]
             st.dataframe(
-                snapshot_df[display_cols],
+                snapshot_df[available_snapshot_cols],
                 use_container_width=True,
                 hide_index=True,
                 column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
@@ -250,8 +311,16 @@ with tab_monitor:
 
 with tab_signals:
     st.subheader("Fee/Spread-Adjusted Signals")
+    if discover:
+        st.caption(
+            "Discovery mode: scanned {markets_seen} open markets, loaded {orderbooks_loaded} candidate orderbooks.".format(
+                markets_seen=scan_metadata.get("markets_seen", scanned),
+                orderbooks_loaded=scan_metadata.get("orderbooks_loaded", len(df)),
+            )
+        )
+    available_display_cols = [col for col in display_cols if col in filtered.columns]
     st.dataframe(
-        filtered[display_cols],
+        filtered[available_display_cols],
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -260,7 +329,7 @@ with tab_signals:
     )
     st.download_button(
         "Download signals CSV",
-        filtered[display_cols].to_csv(index=False).encode("utf-8"),
+        filtered[available_display_cols].to_csv(index=False).encode("utf-8"),
         file_name="kalshi_signals.csv",
         mime="text/csv",
     )

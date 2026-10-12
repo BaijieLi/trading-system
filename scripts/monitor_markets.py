@@ -16,6 +16,7 @@ load_dotenv()
 
 from kalshi_trading_system.collectors.kalshi_public import KalshiPublicClient  # noqa: E402
 from kalshi_trading_system.config import DEFAULT_SERIES, SETTINGS  # noqa: E402
+from kalshi_trading_system.models.discovery import DiscoveryConfig, discover_market_signals  # noqa: E402
 from kalshi_trading_system.models.edge import analyze_markets  # noqa: E402
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     record_monitor_run,
@@ -29,6 +30,10 @@ from kalshi_trading_system.utils.system import process_memory_mb  # noqa: E402
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 FIELDS = [
+    "discovery_score",
+    "liquidity_score",
+    "quote_quality_score",
+    "series_ticker",
     "ticker",
     "title",
     "action",
@@ -68,40 +73,58 @@ def run_once(
     max_markets: int,
     latest_csv: str = "",
     supabase_store: SupabaseStore | None = None,
+    discover: bool = False,
+    discovery_config: DiscoveryConfig | None = None,
 ) -> dict[str, object]:
     started_at = utc_now_iso()
     client = KalshiPublicClient()
-    markets = client.get_markets(series_tickers=series, max_markets=max_markets)
-    enriched = client.enrich_with_orderbooks(markets)
-    signals = analyze_markets(enriched)
+    discovery_metadata: dict[str, object] = {}
+    if discover:
+        signals, discovery_metadata = discover_market_signals(client, discovery_config)
+        markets_scanned = int(discovery_metadata.get("orderbooks_loaded") or len(signals))
+        source = "monitor_discovery"
+    else:
+        markets = client.get_markets(series_tickers=series, max_markets=max_markets)
+        enriched = client.enrich_with_orderbooks(markets)
+        signals = analyze_markets(enriched)
+        markets_scanned = len(enriched)
+        source = "monitor"
     saved = save_signals(
         signals,
-        source="monitor",
-        metadata={"series": series, "max_markets": max_markets, "markets_scanned": len(enriched)},
+        source=source,
+        metadata={
+            "series": series,
+            "max_markets": max_markets,
+            "markets_scanned": markets_scanned,
+            "discover": discover,
+            **discovery_metadata,
+        },
     )
     write_latest_csv(signals, latest_csv)
     actionable = sum(1 for row in signals if row.get("action") in {"BUY_YES_PAPER", "BUY_NO_PAPER"})
     memory_mb = process_memory_mb()
-    status = "OK" if enriched else "WARN"
+    status = "OK" if markets_scanned else "WARN"
     message = (
-        f"Saved {saved} signals from {len(enriched)} markets."
-        if enriched
+        f"Saved {saved} signals from {markets_scanned} markets."
+        if markets_scanned
         else "No markets scanned. Check network, Kalshi API availability, or series tickers."
     )
     metadata = {
         "series": series,
         "max_markets": max_markets,
-        "markets_scanned": len(enriched),
+        "markets_scanned": markets_scanned,
         "signals_saved": saved,
         "actionable_count": actionable,
         "memory_mb": round(memory_mb, 2),
+        "discover": discover,
+        **discovery_metadata,
     }
     record_monitor_run(
         started_at=started_at,
         status=status,
         series=series,
         max_markets=max_markets,
-        markets_scanned=len(enriched),
+        markets_scanned=markets_scanned,
         signals_saved=saved,
         actionable_count=actionable,
         memory_mb=memory_mb,
@@ -126,7 +149,7 @@ def run_once(
             logging.warning("supabase sync failed: %s", supabase_result["error"])
     return {
         "signals_saved": saved,
-        "markets_scanned": len(enriched),
+        "markets_scanned": markets_scanned,
         "actionable_count": actionable,
         "memory_mb": memory_mb,
         "supabase": supabase_result,
@@ -141,13 +164,34 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Run one scan, save it, then exit.")
     parser.add_argument("--latest-csv", default="outputs/kalshi_latest_signals.csv", help="Optional latest snapshot CSV.")
     parser.add_argument("--no-supabase", action="store_true", help="Disable Supabase sync even when env vars are set.")
+    parser.add_argument("--discover", action="store_true", help="Scan broad open markets and monitor ranked candidates.")
+    parser.add_argument("--discovery-scan-limit", type=int, default=SETTINGS.discovery_scan_limit)
+    parser.add_argument("--discovery-candidates", type=int, default=SETTINGS.discovery_candidate_limit)
+    parser.add_argument("--discovery-final-limit", type=int, default=SETTINGS.discovery_final_limit)
+    parser.add_argument("--discovery-min-volume", type=float, default=SETTINGS.discovery_min_volume_24h)
+    parser.add_argument("--discovery-min-open-interest", type=float, default=SETTINGS.discovery_min_open_interest)
+    parser.add_argument("--include-combos", action="store_true", help="Include cross-category combo markets.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     series = parse_series(args.series)
     interval = max(5, int(args.interval))
     supabase_store = None if args.no_supabase else SupabaseStore()
-    logging.info("starting monitor: series=%s max_markets=%s interval=%ss", ",".join(series), args.max_markets, interval)
+    discovery_config = DiscoveryConfig(
+        scan_limit=args.discovery_scan_limit,
+        candidate_limit=args.discovery_candidates,
+        final_limit=args.discovery_final_limit,
+        min_volume_24h=args.discovery_min_volume,
+        min_open_interest=args.discovery_min_open_interest,
+        include_combo_markets=args.include_combos,
+    )
+    logging.info(
+        "starting monitor: mode=%s series=%s max_markets=%s interval=%ss",
+        "discover" if args.discover else "series",
+        ",".join(series),
+        args.max_markets,
+        interval,
+    )
     if supabase_store is not None and supabase_store.enabled:
         logging.info(
             "supabase sync enabled: history_interval=%ss retention=%sd",
@@ -157,7 +201,7 @@ def main() -> None:
     save_heartbeat(
         status="STARTING",
         message="Monitor process started.",
-        metadata={"series": series, "max_markets": args.max_markets, "interval": interval},
+        metadata={"series": series, "max_markets": args.max_markets, "interval": interval, "discover": args.discover},
     )
 
     while True:
@@ -168,6 +212,8 @@ def main() -> None:
                 max_markets=args.max_markets,
                 latest_csv=args.latest_csv,
                 supabase_store=supabase_store,
+                discover=args.discover,
+                discovery_config=discovery_config,
             )
             logging.info(
                 "saved=%s scanned=%s actionable=%s memory_mb=%.1f supabase=%s",

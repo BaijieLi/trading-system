@@ -11,6 +11,7 @@ This project is intentionally conservative. It does **not** place real orders. I
 - Estimates a fair probability from microprice unless you provide a manual/model fair value.
 - Calculates fee-adjusted expected value for YES and NO.
 - Shows paper-only BUY/NO_TRADE/WATCH signals.
+- Can run a broader market discovery scan that ranks liquid candidates before loading orderbooks.
 - Tracks memory usage so it does not overload your computer.
 - Saves signal snapshots and paper trades to SQLite.
 
@@ -20,7 +21,7 @@ This project is intentionally conservative. It does **not** place real orders. I
 - It does not scrape private data.
 - It does not use LinkedIn/Handshake-style scraping.
 - It does not submit live Kalshi orders.
-- It does not run an all-market high-frequency scanner.
+- It does not run an all-market high-frequency scanner or place trades automatically.
 
 ## Run Locally
 
@@ -33,6 +34,18 @@ python scripts/scan_markets.py --max-markets 20
 streamlit run app/dashboard.py --server.port 8504
 ```
 
+To scan a broader open-market universe and rank a candidate watchlist:
+
+```bash
+python scripts/scan_markets.py \
+  --discover \
+  --discovery-scan-limit 1000 \
+  --discovery-candidates 80 \
+  --discovery-final-limit 50
+```
+
+Discovery mode first scans open market metadata, filters out low-liquidity markets, loads orderbooks only for the strongest candidates, and then ranks them with a conservative score based on liquidity, spread/quote quality, and paper edge. It still does not mean "buy"; it means "worth watching first."
+
 ## Run the Background Monitor
 
 The dashboard is for viewing and manual paper trades. The monitor is the process that keeps saving snapshots even when the browser is closed.
@@ -41,6 +54,12 @@ The dashboard is for viewing and manual paper trades. The monitor is the process
 cd /Users/libaijie/Downloads/Github_project/kalshi-trading-system
 source .venv/bin/activate
 python scripts/monitor_markets.py --interval 30 --max-markets 50
+```
+
+For a broader watchlist monitor, use a slower interval so API usage stays reasonable:
+
+```bash
+python scripts/monitor_markets.py --discover --interval 120 --discovery-scan-limit 1000 --discovery-candidates 80
 ```
 
 For a local Mac run where you want to reduce sleep interruptions while the lid stays open:
@@ -81,6 +100,9 @@ The monitor upserts `market_state` every scan, samples `market_observations` eve
 PAPER_TRADING_ONLY=true
 MAX_MARKETS=50
 REFRESH_SECONDS=10
+DISCOVERY_SCAN_LIMIT=1000
+DISCOVERY_CANDIDATE_LIMIT=80
+DISCOVERY_FINAL_LIMIT=50
 MAX_RISK_PER_TRADE_PCT=1.0
 MAX_DAILY_LOSS_PCT=3.0
 SUPABASE_ENABLED=false
