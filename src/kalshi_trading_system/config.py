@@ -33,7 +33,14 @@ class Settings:
     max_spread_dollars: float = float(os.getenv("MAX_SPREAD_DOLLARS", "0.08"))
     min_volume_24h: float = float(os.getenv("MIN_VOLUME_24H", "10"))
     slippage_buffer_dollars: float = float(os.getenv("SLIPPAGE_BUFFER_DOLLARS", "0.01"))
+    supabase_enabled: bool = _env_bool("SUPABASE_ENABLED", False)
+    supabase_url: str = os.getenv("SUPABASE_URL", "").rstrip("/")
+    supabase_service_role_key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    supabase_anon_key: str = os.getenv("SUPABASE_ANON_KEY", "")
+    supabase_request_timeout_seconds: int = int(os.getenv("SUPABASE_REQUEST_TIMEOUT_SECONDS", "15"))
+    supabase_history_interval_seconds: int = int(os.getenv("SUPABASE_HISTORY_INTERVAL_SECONDS", "300"))
+    supabase_retention_days: int = int(os.getenv("SUPABASE_RETENTION_DAYS", "14"))
+    supabase_cleanup_interval_seconds: int = int(os.getenv("SUPABASE_CLEANUP_INTERVAL_SECONDS", "3600"))
 
 
 SETTINGS = Settings()
-

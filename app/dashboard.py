@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import sys
 from pathlib import Path
 
@@ -11,15 +12,23 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from dotenv import load_dotenv  # noqa: E402
 
+load_dotenv()
+
 from kalshi_trading_system.collectors.kalshi_public import KalshiPublicClient  # noqa: E402
 from kalshi_trading_system.config import DEFAULT_SERIES, SETTINGS  # noqa: E402
 from kalshi_trading_system.execution.paper_broker import simulate_trade  # noqa: E402
 from kalshi_trading_system.models.edge import analyze_markets  # noqa: E402
-from kalshi_trading_system.storage.sqlite_store import save_signals, save_trade  # noqa: E402
+from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
+    latest_heartbeat,
+    latest_signal_snapshot,
+    recent_monitor_runs,
+    save_signals,
+    save_trade,
+)
+from kalshi_trading_system.storage.supabase_store import SupabaseReader  # noqa: E402
 from kalshi_trading_system.utils.system import process_memory_mb  # noqa: E402
 
 
-load_dotenv()
 st.set_page_config(page_title="Kalshi Trading Radar", page_icon="📈", layout="wide")
 
 
@@ -30,6 +39,34 @@ def load_signals(series: tuple[str, ...], max_markets: int) -> tuple[pd.DataFram
     enriched = client.enrich_with_orderbooks(markets)
     signals = analyze_markets(enriched)
     return pd.DataFrame(signals), len(enriched)
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def load_monitor_state() -> tuple[dict[str, object] | None, dict[str, object] | None, list[dict[str, object]]]:
+    return latest_heartbeat(), latest_signal_snapshot(), recent_monitor_runs(limit=10)
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def load_cloud_state() -> tuple[dict[str, object] | None, list[dict[str, object]], list[dict[str, object]], bool]:
+    reader = SupabaseReader()
+    if not reader.enabled:
+        return None, [], [], False
+    return reader.heartbeat(), reader.market_state(limit=200), reader.monitor_runs(limit=10), True
+
+
+def age_label(iso_timestamp: str) -> str:
+    try:
+        value = datetime.fromisoformat(iso_timestamp)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        seconds = max(0, int((datetime.now(timezone.utc) - value).total_seconds()))
+    except ValueError:
+        return "unknown"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    return f"{seconds // 3600}h ago"
 
 
 def parse_manual_fair(text: str) -> dict[str, float]:
@@ -63,6 +100,15 @@ with st.sidebar:
     )
     max_markets = st.slider("Max markets", min_value=5, max_value=50, value=min(SETTINGS.max_markets, 50), step=5)
     st.caption(f"Refresh target: {SETTINGS.refresh_seconds}s. Streamlit cache TTL: 10s.")
+
+    heartbeat, latest_snapshot, monitor_runs = load_monitor_state()
+    st.header("Background Monitor")
+    if heartbeat:
+        st.write(f"Status: **{heartbeat['status']}**")
+        st.caption(f"Last heartbeat: {age_label(str(heartbeat['updated_at']))}")
+    else:
+        st.caption("No background monitor heartbeat yet.")
+    st.code("python scripts/monitor_markets.py --interval 30 --max-markets 50", language="bash")
 
     st.header("Manual Fair Values")
     manual_text = st.text_area(
@@ -126,7 +172,81 @@ display_cols = [
     "market_url",
 ]
 
-tab_signals, tab_paper, tab_notes = st.tabs(["Signals", "Paper Trade", "Reality Check"])
+tab_cloud, tab_monitor, tab_signals, tab_paper, tab_notes = st.tabs(
+    ["Cloud", "Monitor", "Signals", "Paper Trade", "Reality Check"]
+)
+
+with tab_cloud:
+    st.subheader("Supabase Cloud State")
+    cloud_heartbeat, cloud_rows, cloud_runs, cloud_enabled = load_cloud_state()
+    if not cloud_enabled:
+        st.info("Set SUPABASE_URL and SUPABASE_ANON_KEY to read the cloud-backed latest market state.")
+    else:
+        if cloud_heartbeat:
+            cloud_cols = st.columns(4)
+            cloud_cols[0].metric("cloud status", cloud_heartbeat.get("status", "unknown"))
+            cloud_cols[1].metric("updated", age_label(str(cloud_heartbeat.get("updated_at", ""))))
+            metadata = cloud_heartbeat.get("metadata") or {}
+            cloud_cols[2].metric("markets", metadata.get("markets_scanned", 0))
+            cloud_cols[3].metric("actionable", metadata.get("actionable_count", 0))
+            st.caption(str(cloud_heartbeat.get("message", "")))
+        if cloud_rows:
+            cloud_df = pd.DataFrame(cloud_rows)
+            available_cols = [col for col in display_cols if col in cloud_df.columns]
+            st.dataframe(
+                cloud_df[available_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
+            )
+        else:
+            st.caption("No cloud market rows yet.")
+        if cloud_runs:
+            st.subheader("Cloud Monitor Runs")
+            st.dataframe(pd.DataFrame(cloud_runs), use_container_width=True, hide_index=True)
+
+with tab_monitor:
+    st.subheader("Background Monitor Health")
+    if heartbeat:
+        metadata = heartbeat.get("metadata") or {}
+        monitor_cols = st.columns(5)
+        monitor_cols[0].metric("status", str(heartbeat["status"]))
+        monitor_cols[1].metric("last heartbeat", age_label(str(heartbeat["updated_at"])))
+        monitor_cols[2].metric("last saved", metadata.get("signals_saved", 0))
+        monitor_cols[3].metric("actionable", metadata.get("actionable_count", 0))
+        monitor_cols[4].metric("monitor MB", metadata.get("memory_mb", 0))
+        st.caption(str(heartbeat["message"]))
+    else:
+        st.info("Start the background monitor to get automatic snapshots and heartbeat checks.")
+
+    st.code(
+        "cd /Users/libaijie/Downloads/Github_project/kalshi-trading-system\n"
+        "source .venv/bin/activate\n"
+        "python scripts/monitor_markets.py --interval 30 --max-markets 50",
+        language="bash",
+    )
+
+    if latest_snapshot:
+        st.subheader("Latest Saved Snapshot")
+        snapshot_rows = latest_snapshot.get("rows") or []
+        st.caption(
+            f"Snapshot #{latest_snapshot['id']} saved {age_label(str(latest_snapshot['created_at']))} "
+            f"from source={latest_snapshot['source']}"
+        )
+        if snapshot_rows:
+            snapshot_df = pd.DataFrame(snapshot_rows)
+            st.dataframe(
+                snapshot_df[display_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
+            )
+    else:
+        st.caption("No saved snapshots yet.")
+
+    if monitor_runs:
+        st.subheader("Recent Monitor Runs")
+        st.dataframe(pd.DataFrame(monitor_runs), use_container_width=True, hide_index=True)
 
 with tab_signals:
     st.subheader("Fee/Spread-Adjusted Signals")
@@ -176,4 +296,3 @@ with tab_notes:
         "Default blockers: no two-sided quote, wide spread, low 24h volume, or low visible depth. "
         "This is designed to avoid the common trap of buying markets that look cheap but cannot be exited."
     )
-
