@@ -16,13 +16,17 @@ load_dotenv()
 
 from kalshi_trading_system.collectors.kalshi_public import KalshiPublicClient  # noqa: E402
 from kalshi_trading_system.config import DEFAULT_SERIES, SETTINGS  # noqa: E402
+from kalshi_trading_system.execution.exit_strategy import SELL_ACTIONS, evaluate_open_positions  # noqa: E402
 from kalshi_trading_system.execution.paper_broker import simulate_trade  # noqa: E402
 from kalshi_trading_system.models.discovery import DiscoveryConfig, discover_market_signals  # noqa: E402
 from kalshi_trading_system.models.edge import analyze_markets  # noqa: E402
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
     latest_signal_snapshot,
+    open_paper_trades,
+    recent_paper_exits,
     recent_monitor_runs,
+    save_paper_exit,
     save_signals,
     save_trade,
 )
@@ -233,7 +237,7 @@ display_cols = [
 ]
 
 tab_cloud, tab_monitor, tab_signals, tab_paper, tab_notes = st.tabs(
-    ["Cloud", "Monitor", "Signals", "Paper Trade", "Reality Check"]
+    ["Cloud", "Monitor", "Signals", "Paper Trades", "Reality Check"]
 )
 
 with tab_cloud:
@@ -355,6 +359,54 @@ with tab_paper:
                 save_trade(trade.to_dict())
                 st.success(f"Recorded paper {trade.side} trade: {trade.contracts} contracts at ${trade.price:.2f}")
 
+    st.divider()
+    st.subheader("Open Paper Positions")
+    open_positions = open_paper_trades(limit=50)
+    if not open_positions:
+        st.caption("No open paper positions yet.")
+    else:
+        exit_rows = evaluate_open_positions(open_positions, df.to_dict("records"))
+        exit_df = pd.DataFrame(exit_rows)
+        exit_cols = [
+            "trade_id",
+            "ticker",
+            "side",
+            "contracts",
+            "action",
+            "entry_price",
+            "exit_price",
+            "unrealized_pnl",
+            "unrealized_roi",
+            "remaining_edge",
+            "side_probability",
+            "reason",
+        ]
+        visible_exit_cols = [col for col in exit_cols if col in exit_df.columns]
+        st.dataframe(exit_df[visible_exit_cols], use_container_width=True, hide_index=True)
+
+        recommended_exits = exit_df[exit_df["action"].isin(SELL_ACTIONS)] if "action" in exit_df.columns else pd.DataFrame()
+        if recommended_exits.empty:
+            st.caption("No paper position currently hits a modeled sell threshold.")
+        else:
+            selected_trade_id = st.selectbox(
+                "Recommended paper exit",
+                recommended_exits["trade_id"].astype(int).tolist(),
+                format_func=lambda value: f"Trade #{value}",
+            )
+            selected_exit = recommended_exits[recommended_exits["trade_id"] == selected_trade_id].iloc[0].to_dict()
+            st.json(selected_exit)
+            if st.button("Record recommended paper exit"):
+                save_paper_exit(selected_exit)
+                st.success(
+                    "Recorded paper exit for "
+                    f"{selected_exit['ticker']} at ${float(selected_exit['exit_price']):.2f}"
+                )
+
+    recent_exits = recent_paper_exits(limit=20)
+    if recent_exits:
+        st.subheader("Recent Paper Exits")
+        st.dataframe(pd.DataFrame(recent_exits), use_container_width=True, hide_index=True)
+
 with tab_notes:
     st.subheader("Why this is conservative")
     st.write(
@@ -364,4 +416,9 @@ with tab_notes:
     st.write(
         "Default blockers: no two-sided quote, wide spread, low 24h volume, or low visible depth. "
         "This is designed to avoid the common trap of buying markets that look cheap but cannot be exited."
+    )
+    st.write(
+        "Paper exit rules are deliberately simple: take profit when unrealized return clears the target, cut losses at "
+        "the stop threshold, sell when the original edge disappears, and hold only while the current side still has "
+        "meaningful estimated value versus the visible exit bid."
     )

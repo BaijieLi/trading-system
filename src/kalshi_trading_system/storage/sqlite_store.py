@@ -58,6 +58,24 @@ def connect(path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS paper_exits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            side TEXT NOT NULL,
+            contracts INTEGER NOT NULL,
+            entry_price REAL NOT NULL,
+            exit_price REAL NOT NULL,
+            realized_pnl REAL NOT NULL,
+            realized_roi REAL NOT NULL,
+            reason TEXT NOT NULL,
+            FOREIGN KEY(trade_id) REFERENCES paper_trades(id)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS monitor_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             started_at TEXT NOT NULL,
@@ -132,6 +150,32 @@ def save_trade(trade: dict[str, object], path: str | Path = DEFAULT_DB) -> None:
                 float(trade["price"]),
                 float(trade["notional"]),
                 str(trade["reason"]),
+            ),
+        )
+        conn.commit()
+
+
+def save_paper_exit(exit_decision: dict[str, object], path: str | Path = DEFAULT_DB) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            """
+            INSERT INTO paper_exits (
+                trade_id, created_at, ticker, side, contracts, entry_price, exit_price,
+                realized_pnl, realized_roi, reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(exit_decision["trade_id"]),
+                str(exit_decision.get("timestamp") or utc_now_iso()),
+                str(exit_decision["ticker"]),
+                str(exit_decision["side"]),
+                int(exit_decision["contracts"]),
+                float(exit_decision["entry_price"]),
+                float(exit_decision["exit_price"]),
+                float(exit_decision["unrealized_pnl"]),
+                float(exit_decision["unrealized_roi"]),
+                str(exit_decision["reason"]),
             ),
         )
         conn.commit()
@@ -252,6 +296,51 @@ def recent_monitor_runs(limit: int = 20, path: str | Path = DEFAULT_DB) -> list[
             SELECT started_at, finished_at, status, series, max_markets, markets_scanned,
                    signals_saved, actionable_count, error_message, memory_mb
             FROM monitor_runs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def recent_paper_trades(limit: int = 50, path: str | Path = DEFAULT_DB) -> list[dict[str, object]]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, created_at, ticker, side, contracts, price, notional, reason
+            FROM paper_trades
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def open_paper_trades(limit: int = 50, path: str | Path = DEFAULT_DB) -> list[dict[str, object]]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT t.id, t.created_at, t.ticker, t.side, t.contracts, t.price, t.notional, t.reason
+            FROM paper_trades t
+            LEFT JOIN paper_exits e ON e.trade_id = t.id
+            WHERE e.id IS NULL
+            ORDER BY t.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def recent_paper_exits(limit: int = 50, path: str | Path = DEFAULT_DB) -> list[dict[str, object]]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, trade_id, created_at, ticker, side, contracts, entry_price, exit_price,
+                   realized_pnl, realized_roi, reason
+            FROM paper_exits
             ORDER BY id DESC
             LIMIT ?
             """,

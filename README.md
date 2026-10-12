@@ -11,9 +11,10 @@ This project is intentionally conservative. It does **not** place real orders. I
 - Estimates a fair probability from microprice unless you provide a manual/model fair value.
 - Calculates fee-adjusted expected value for YES and NO.
 - Shows paper-only BUY/NO_TRADE/WATCH signals.
+- Tracks open paper positions and generates SELL/HOLD exit guidance from the latest bid, fair probability, unrealized PnL, and remaining edge.
 - Can run a broader market discovery scan that ranks liquid candidates before loading orderbooks.
 - Tracks memory usage so it does not overload your computer.
-- Saves signal snapshots and paper trades to SQLite.
+- Saves signal snapshots, paper trades, and paper exits to SQLite.
 
 ## What It Does Not Do
 
@@ -114,5 +115,17 @@ SUPABASE_ENABLED=false
 - `BUY_NO_PAPER`: paper-only signal where estimated NO edge clears fee, spread, and slippage buffers.
 - `WATCH`: market is tradable enough to watch, but no fee-adjusted edge.
 - `NO_TRADE`: blocked by liquidity, depth, or spread filters.
+
+## Paper Exit Guidance
+
+After a paper trade is recorded, the dashboard treats it as an open position until a paper exit is recorded. The `Paper Trades` tab compares the entry price with the current visible bid and assigns one of these exit actions:
+
+- `SELL_TAKE_PROFIT`: unrealized return cleared the take-profit threshold.
+- `SELL_STOP_LOSS`: unrealized return crossed the stop-loss threshold.
+- `SELL_EDGE_GONE`: holding is no longer meaningfully better than exiting at the visible bid.
+- `SELL_RISK_REVERSAL`: the latest signal favors the opposite side.
+- `HOLD`: no exit threshold has fired.
+- `HOLD_TO_SETTLEMENT`: the estimated side probability is high and remaining edge is still positive.
+- `HOLD_MONITOR`: the position needs more data before an orderly exit can be modeled.
 
 Microprice-based fair value is not enough to trade real money. Before live trading, the next step is to plug in a domain model, run paper trading for several weeks, and check realized PnL, drawdown, fill quality, and whether the edge survives fees.
