@@ -1,0 +1,20 @@
+[project]
+name = "kalshi-trading-system"
+version = "0.1.0"
+description = "Lightweight Kalshi market scanner, edge calculator, paper trader, and risk dashboard."
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.2",
+  "psutil>=6.0",
+  "python-dotenv>=1.0",
+  "requests>=2.31",
+  "streamlit>=1.36",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
