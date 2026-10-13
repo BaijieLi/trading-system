@@ -147,6 +147,11 @@ class KalshiPublicClient:
     def get_orderbook(self, ticker: str, depth: int = 10) -> dict[str, Any]:
         return self._get(f"/markets/{ticker}/orderbook", {"depth": depth})
 
+    def get_market(self, ticker: str) -> dict[str, Any]:
+        payload = self._get(f"/markets/{ticker}")
+        market = payload.get("market")
+        return market if isinstance(market, dict) else payload
+
     def enrich_with_orderbooks(self, markets: list[dict[str, Any]], depth: int = 10) -> list[dict[str, Any]]:
         enriched: list[dict[str, Any]] = []
         for market in markets:
