@@ -15,7 +15,11 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv()
 
 from kalshi_trading_system.collectors.kalshi_public import KalshiPublicClient  # noqa: E402
-from kalshi_trading_system.collectors.nba_live import fetch_best_nba_scoreboard  # noqa: E402
+from kalshi_trading_system.collectors.nba_live import (  # noqa: E402
+    NBA_SCOREBOARD_TIMEZONE,
+    default_nba_scoreboard_date,
+    fetch_best_nba_scoreboard,
+)
 from kalshi_trading_system.config import DEFAULT_SERIES, SETTINGS  # noqa: E402
 from kalshi_trading_system.execution.exit_strategy import SELL_ACTIONS, evaluate_open_positions  # noqa: E402
 from kalshi_trading_system.execution.paper_broker import simulate_trade  # noqa: E402
@@ -365,9 +369,12 @@ with tab_nba:
         "This helps catch stale provider data during preseason and live games."
     )
     nba_cols = st.columns([1, 1, 2])
-    selected_nba_date = nba_cols[0].date_input("Game date", value=date.today())
+    selected_nba_date = nba_cols[0].date_input("Game date", value=default_nba_scoreboard_date())
     include_nba_compare = nba_cols[1].checkbox("Compare NBA liveData", value=True)
-    nba_cols[2].caption("Refresh TTL: 15s. Re-run/reload the app for the newest provider response.")
+    nba_cols[2].caption(
+        f"Default date uses {NBA_SCOREBOARD_TIMEZONE}. Refresh TTL: 15s. "
+        "Re-run/reload the app for the newest provider response."
+    )
 
     with st.spinner("Loading NBA live scoreboard..."):
         nba_df, nba_metadata = load_nba_scoreboard(selected_nba_date, include_nba_compare)

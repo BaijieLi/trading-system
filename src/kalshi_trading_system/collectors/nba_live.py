@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 import math
 import re
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -19,6 +20,7 @@ HEADERS = {
     "Accept": "application/json",
     "User-Agent": "Mozilla/5.0 (kalshi-trading-system nba live monitor)",
 }
+NBA_SCOREBOARD_TIMEZONE = "America/New_York"
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,14 @@ def _parse_iso(value: str) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def default_nba_scoreboard_date(now: datetime | None = None, timezone_name: str = NBA_SCOREBOARD_TIMEZONE) -> date:
+    """Return the scoreboard date in the NBA's usual US Eastern day boundary."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(ZoneInfo(timezone_name)).date()
 
 
 def _parse_clock_minutes(clock: object) -> float:

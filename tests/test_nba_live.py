@@ -1,10 +1,21 @@
+from datetime import date, datetime, timezone
+
 from kalshi_trading_system.collectors.nba_live import (
     compare_scoreboards,
+    default_nba_scoreboard_date,
     estimate_minutes_remaining,
     estimate_win_probability,
     parse_espn_scoreboard,
     parse_nba_livedata_scoreboard,
 )
+
+
+def test_default_nba_scoreboard_date_uses_eastern_day() -> None:
+    utc_after_midnight = datetime(2026, 10, 13, 1, 30, tzinfo=timezone.utc)
+    utc_midday = datetime(2026, 10, 13, 16, 0, tzinfo=timezone.utc)
+
+    assert default_nba_scoreboard_date(utc_after_midnight) == date(2026, 10, 12)
+    assert default_nba_scoreboard_date(utc_midday) == date(2026, 10, 13)
 
 
 def test_parse_espn_scoreboard() -> None:

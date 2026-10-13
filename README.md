@@ -135,6 +135,6 @@ Microprice-based fair value is not enough to trade real money. Before live tradi
 
 ## NBA Live Scores
 
-The Streamlit dashboard includes an `NBA Live` tab for checking current NBA scores while reviewing sports-related markets. It intentionally does not rely on Kalshi for scoreboard truth. ESPN is used as the primary scoreboard source, while NBA liveData is queried as a comparison source when available. If the two providers disagree, the dashboard shows a warning instead of silently trusting stale data.
+The Streamlit dashboard includes an `NBA Live` tab for checking current NBA scores while reviewing sports-related markets. It intentionally does not rely on Kalshi for scoreboard truth. ESPN is used as the primary scoreboard source, while NBA liveData is queried as a comparison source when available. The default scoreboard date uses `America/New_York` so cloud deployments do not jump to tomorrow when the server clock is already past midnight UTC. If the two providers disagree, the dashboard shows a warning instead of silently trusting stale data.
 
 The same tab also shows `predicted_winner`, `home_win_prob`, `away_win_prob`, and `confidence`. This is a simple score-clock heuristic: finals are assigned to the actual winner, scheduled games are treated as 50/50 unless a future team-strength model is added, and live games use current score margin plus estimated minutes remaining. It is for situational awareness, not a betting line.
