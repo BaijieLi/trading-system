@@ -4,13 +4,23 @@ from dataclasses import dataclass
 import os
 
 
-DEFAULT_SERIES = (
-    "KXHIGHNY",
-    "KXHIGHDEN",
-    "KXBTCD",
-    "KXNASDAQ100D",
-    "KXSPY",
+SPORTS_SERIES = (
+    "KXNBAGAME",
+    "KXNBATOTAL",
+    "KXNFLGAME",
+    "KXNFLTOTAL",
+    "KXMLBGAME",
+    "KXMLBTOTAL",
+    "KXNHLGAME",
+    "KXNHLTOTAL",
+    "KXATPMATCH",
+    "KXWTAMATCH",
+    "KXATPCHALLENGERMATCH",
+    "KXWTACHALLENGERMATCH",
+    "KXITFMATCH",
+    "KXITFWMATCH",
 )
+DEFAULT_SERIES = SPORTS_SERIES
 
 
 def _env_bool(name: str, default: bool) -> bool:

@@ -251,11 +251,11 @@ st.warning(
 )
 
 with st.sidebar:
-    st.header("Market Universe")
+    st.header("Sports Market Universe")
     series_text = st.text_area(
         "Series tickers",
         value=",".join(DEFAULT_SERIES),
-        help="Comma-separated series tickers. Keep this small to protect memory and API usage.",
+        help="Default is sports only: NBA, NFL, MLB, NHL, and tennis series. Keep this bounded to protect memory and API usage.",
     )
     max_markets = st.slider("Max markets", min_value=5, max_value=50, value=min(SETTINGS.max_markets, 50), step=5)
     discover = st.checkbox(
@@ -380,7 +380,11 @@ tab_cloud, tab_monitor, tab_signals, tab_nba, tab_tennis, tab_paper, tab_notes =
 )
 
 with tab_cloud:
-    st.subheader("Supabase Cloud State")
+    st.subheader("Sports Cloud State")
+    st.caption(
+        "Latest Supabase rows are replaced on each monitor sync, so old BTC/weather/index rows are not mixed into "
+        "the sports board. Actions are paper-trading recommendations, not financial advice."
+    )
     cloud_heartbeat, cloud_rows, cloud_runs, cloud_enabled = load_cloud_state()
     if not cloud_enabled:
         st.info("Set SUPABASE_URL and SUPABASE_ANON_KEY to read the cloud-backed latest market state.")

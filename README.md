@@ -16,6 +16,7 @@ This project is intentionally conservative. It does **not** place real orders. I
 - Can run a broader market discovery scan that ranks liquid candidates before loading orderbooks.
 - Tracks memory usage so it does not overload your computer.
 - Saves signal snapshots, paper trades, and paper exits to SQLite.
+- Defaults to sports markets: NBA, NFL, MLB, NHL, and tennis.
 - Includes an NBA live scoreboard tab that uses ESPN as the primary live source and compares it against NBA liveData to flag stale provider responses.
 - Adds a transparent NBA score-clock win probability heuristic for live games, finals, and scheduled games.
 
@@ -53,6 +54,7 @@ Discovery mode first scans open market metadata, filters out low-liquidity marke
 ## Run the Background Monitor
 
 The dashboard is for viewing and manual paper trades. The monitor is the process that keeps saving snapshots even when the browser is closed.
+By default, the monitor watches only sports series: NBA, NFL, MLB, NHL, and tennis.
 
 ```bash
 cd /Users/libaijie/Downloads/Github_project/kalshi-trading-system
@@ -96,7 +98,7 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-anon-key
 ```
 
-The monitor upserts `market_state` every scan, samples `market_observations` every 5 minutes, and cleans old history so Supabase Free is not filled by 30-second full snapshots. See `docs/supabase/README.md`.
+The monitor replaces `market_state` every scan, samples `market_observations` every 5 minutes, and cleans old history so Supabase Free is not filled by 30-second full snapshots. Replacing the latest table prevents old BTC/weather/index rows from appearing after switching to sports. See `docs/supabase/README.md`.
 
 ## Safety Defaults
 

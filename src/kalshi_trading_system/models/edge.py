@@ -17,6 +17,7 @@ MARKET_PAGE_SERIES_SLUGS = {
 @dataclass(frozen=True)
 class Signal:
     ticker: str
+    series_ticker: str
     title: str
     action: str
     fair_probability: float
@@ -122,6 +123,7 @@ def analyze_market(
     roi = ev / price if price > 0 else 0.0
     return Signal(
         ticker=quote.ticker,
+        series_ticker=quote.ticker.split("-", 1)[0],
         title=quote.title,
         action=action,
         fair_probability=round(fair, 4),

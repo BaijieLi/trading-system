@@ -63,8 +63,16 @@ def test_supabase_sync_writes_latest_history_and_cleanup(monkeypatch, tmp_path):
     assert "kalshi_monitor_runs" in called_tables
     assert "market_observations" in called_tables
     assert "signal_events" in called_tables
-    assert calls[0]["headers"]["Authorization"] == "Bearer secret"
-    assert calls[0]["params"]["on_conflict"] == "ticker"
+    market_state_delete = next(
+        call for call in calls if call["method"] == "DELETE" and call["url"].endswith("/market_state")
+    )
+    market_state_upsert = next(
+        call for call in calls if call["method"] == "POST" and call["url"].endswith("/market_state")
+    )
+    assert market_state_delete["params"]["ticker"] == "not.is.null"
+    assert market_state_upsert["headers"]["Authorization"] == "Bearer secret"
+    assert market_state_upsert["params"]["on_conflict"] == "ticker"
+    assert result["market_state_replaced"] is True
 
 
 def test_supabase_history_interval_skips_frequent_observations(monkeypatch, tmp_path):
@@ -97,6 +105,7 @@ def test_supabase_history_interval_skips_frequent_observations(monkeypatch, tmp_
 
     called_tables = [call["url"].rsplit("/", 1)[-1] for call in calls]
     assert "market_state" in called_tables
+    assert any(call["method"] == "DELETE" and call["url"].endswith("/market_state") for call in calls)
     assert "market_observations" not in called_tables
 
 

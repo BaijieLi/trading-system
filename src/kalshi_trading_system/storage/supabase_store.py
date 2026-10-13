@@ -87,6 +87,7 @@ class SupabaseStore:
 
         now = _parse_iso(observed_at) or _utc_now()
         state = self._load_state()
+        self.clear_market_state()
         self.upsert_market_state(signals, observed_at=observed_at)
         self.upsert_heartbeat(status=status, message=message, metadata=metadata, observed_at=observed_at)
         self.insert_monitor_run(status=status, message=message, metadata=metadata, observed_at=observed_at)
@@ -113,10 +114,14 @@ class SupabaseStore:
         return {
             "enabled": True,
             "latest_rows": len(signals),
+            "market_state_replaced": True,
             "observation_rows": len(signals) if wrote_observations else 0,
             "signal_event_rows": len(actionable_rows),
             "cleanup_ran": cleaned,
         }
+
+    def clear_market_state(self) -> None:
+        self._delete("market_state", {"ticker": "not.is.null"})
 
     def upsert_market_state(self, signals: list[dict[str, object]], observed_at: str) -> None:
         rows = [self._market_state_row(row, observed_at=observed_at) for row in signals]
