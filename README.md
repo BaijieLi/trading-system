@@ -16,6 +16,7 @@ This project is intentionally conservative. It does **not** place real orders. I
 - Can run a broader market discovery scan that ranks liquid candidates before loading orderbooks.
 - Tracks memory usage so it does not overload your computer.
 - Saves signal snapshots, paper trades, and paper exits to SQLite.
+- Includes an NBA live scoreboard tab that uses ESPN as the primary live source and compares it against NBA liveData to flag stale provider responses.
 
 ## What It Does Not Do
 
@@ -130,3 +131,7 @@ After a paper trade is recorded, the dashboard treats it as an open position unt
 - `HOLD_MONITOR`: the position needs more data before an orderly exit can be modeled.
 
 Microprice-based fair value is not enough to trade real money. Before live trading, the next step is to plug in a domain model, run paper trading for several weeks, and check realized PnL, drawdown, fill quality, and whether the edge survives fees.
+
+## NBA Live Scores
+
+The Streamlit dashboard includes an `NBA Live` tab for checking current NBA scores while reviewing sports-related markets. It intentionally does not rely on Kalshi for scoreboard truth. ESPN is used as the primary scoreboard source, while NBA liveData is queried as a comparison source when available. If the two providers disagree, the dashboard shows a warning instead of silently trusting stale data.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import sys
 from pathlib import Path
 
@@ -15,6 +15,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv()
 
 from kalshi_trading_system.collectors.kalshi_public import KalshiPublicClient  # noqa: E402
+from kalshi_trading_system.collectors.nba_live import fetch_best_nba_scoreboard  # noqa: E402
 from kalshi_trading_system.config import DEFAULT_SERIES, SETTINGS  # noqa: E402
 from kalshi_trading_system.execution.exit_strategy import SELL_ACTIONS, evaluate_open_positions  # noqa: E402
 from kalshi_trading_system.execution.paper_broker import simulate_trade  # noqa: E402
@@ -74,6 +75,12 @@ def load_cloud_state() -> tuple[dict[str, object] | None, list[dict[str, object]
     if not reader.enabled:
         return None, [], [], False
     return reader.heartbeat(), reader.market_state(limit=200), reader.monitor_runs(limit=10), True
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def load_nba_scoreboard(game_date: date, include_comparison: bool) -> tuple[pd.DataFrame, dict[str, object]]:
+    result = fetch_best_nba_scoreboard(game_date=game_date, include_comparison=include_comparison)
+    return pd.DataFrame(result.rows), result.metadata
 
 
 def age_label(iso_timestamp: str) -> str:
@@ -246,8 +253,8 @@ display_cols = [
     "market_url",
 ]
 
-tab_cloud, tab_monitor, tab_signals, tab_paper, tab_notes = st.tabs(
-    ["Cloud", "Monitor", "Signals", "Paper Trades", "Reality Check"]
+tab_cloud, tab_monitor, tab_signals, tab_nba, tab_paper, tab_notes = st.tabs(
+    ["Cloud", "Monitor", "Signals", "NBA Live", "Paper Trades", "Reality Check"]
 )
 
 with tab_cloud:
@@ -350,6 +357,70 @@ with tab_signals:
     if st.button("Save snapshot to SQLite"):
         save_signals(filtered.to_dict("records"))
         st.success("Saved signal snapshot to data/kalshi_paper.sqlite3")
+
+with tab_nba:
+    st.subheader("NBA Live Scoreboard")
+    st.caption(
+        "Uses ESPN as the primary live scoreboard and compares against NBA liveData when available. "
+        "This helps catch stale provider data during preseason and live games."
+    )
+    nba_cols = st.columns([1, 1, 2])
+    selected_nba_date = nba_cols[0].date_input("Game date", value=date.today())
+    include_nba_compare = nba_cols[1].checkbox("Compare NBA liveData", value=True)
+    nba_cols[2].caption("Refresh TTL: 15s. Re-run/reload the app for the newest provider response.")
+
+    with st.spinner("Loading NBA live scoreboard..."):
+        nba_df, nba_metadata = load_nba_scoreboard(selected_nba_date, include_nba_compare)
+
+    selected_source = str(nba_metadata.get("selected_source") or "unknown")
+    nba_metric_cols = st.columns(4)
+    nba_metric_cols[0].metric("selected source", selected_source)
+    nba_metric_cols[1].metric("games", int(nba_metadata.get("games") or len(nba_df)))
+    comparison = nba_metadata.get("comparison") if isinstance(nba_metadata.get("comparison"), dict) else {}
+    nba_metric_cols[2].metric("source mismatches", int(comparison.get("mismatch_count") or 0))
+    nba_metric_cols[3].metric("fetched", age_label(str(nba_metadata.get("dashboard_fetched_at") or "")))
+
+    if nba_metadata.get("nba_provider_time"):
+        st.caption(
+            "NBA liveData provider timestamp: "
+            f"{nba_metadata.get('nba_provider_time')} for game date {nba_metadata.get('nba_game_date', '')}."
+        )
+    errors = nba_metadata.get("errors") or []
+    if errors:
+        st.warning(" | ".join(str(error) for error in errors))
+    mismatches = comparison.get("mismatches") if isinstance(comparison, dict) else []
+    if mismatches:
+        st.warning("Provider disagreement detected: " + " ; ".join(str(item) for item in mismatches))
+
+    if nba_df.empty:
+        st.info("No NBA games returned for this date/source.")
+    else:
+        nba_display_cols = [
+            "source",
+            "status",
+            "period",
+            "clock",
+            "away",
+            "away_score",
+            "home",
+            "home_score",
+            "venue",
+            "game_time_utc",
+            "game_url",
+        ]
+        available_nba_cols = [col for col in nba_display_cols if col in nba_df.columns]
+        st.dataframe(
+            nba_df[available_nba_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={"game_url": st.column_config.LinkColumn("game_url", display_text="Gamecast")},
+        )
+        st.download_button(
+            "Download NBA scoreboard CSV",
+            nba_df[available_nba_cols].to_csv(index=False).encode("utf-8"),
+            file_name="nba_live_scoreboard.csv",
+            mime="text/csv",
+        )
 
 with tab_paper:
     st.subheader("Paper Trade One Signal")
