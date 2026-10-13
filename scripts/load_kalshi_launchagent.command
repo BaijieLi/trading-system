@@ -11,12 +11,24 @@ mkdir -p logs
 
 echo "Checking LaunchAgent plist..."
 plutil -lint "$PLIST" || exit 1
+chmod 644 "$PLIST" || exit 1
 
-echo "Unloading any previous copy..."
+echo "Stopping/removing any previous copy..."
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+launchctl bootout "$DOMAIN" "$PLIST" 2>/dev/null || true
+launchctl remove "$LABEL" 2>/dev/null || true
+sleep 1
 
 echo "Loading Kalshi monitor into $DOMAIN..."
-launchctl bootstrap "$DOMAIN" "$PLIST" || exit 1
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  echo "Service is still registered; restarting it in place."
+else
+  if ! launchctl bootstrap "$DOMAIN" "$PLIST"; then
+    echo "bootstrap failed; trying legacy launchctl load -w fallback..."
+    launchctl load -w "$PLIST" || exit 1
+  fi
+fi
+launchctl enable "$DOMAIN/$LABEL" 2>/dev/null || true
 
 echo "Starting Kalshi monitor..."
 launchctl kickstart -k "$DOMAIN/$LABEL" || exit 1
