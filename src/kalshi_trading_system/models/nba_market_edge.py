@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import math
 import re
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
 from kalshi_trading_system.collectors.kalshi_public import KalshiPublicClient
+from kalshi_trading_system.collectors.nba_live import NBA_SCOREBOARD_TIMEZONE
 from kalshi_trading_system.config import SETTINGS
 from kalshi_trading_system.models.discovery import markets_from_events
 from kalshi_trading_system.models.edge import ticker_market_url
@@ -16,9 +19,50 @@ from kalshi_trading_system.models.orderbook import Quote, quote_from_market
 
 
 NBA_CONTEXT_TERMS = ("nba", "basketball", "pro basketball")
+KALSHI_NBA_TEAM_CODES = {
+    "ATL": "ATL",
+    "BKN": "BKN",
+    "BOS": "BOS",
+    "CHA": "CHA",
+    "CHI": "CHI",
+    "CLE": "CLE",
+    "DAL": "DAL",
+    "DEN": "DEN",
+    "DET": "DET",
+    "GS": "GSW",
+    "GSW": "GSW",
+    "HOU": "HOU",
+    "IND": "IND",
+    "LAC": "LAC",
+    "LAL": "LAL",
+    "MEM": "MEM",
+    "MIA": "MIA",
+    "MIL": "MIL",
+    "MIN": "MIN",
+    "NO": "NOP",
+    "NOP": "NOP",
+    "NY": "NYK",
+    "NYK": "NYK",
+    "OKC": "OKC",
+    "ORL": "ORL",
+    "PHI": "PHI",
+    "PHO": "PHX",
+    "PHX": "PHX",
+    "POR": "POR",
+    "SA": "SAS",
+    "SAS": "SAS",
+    "SAC": "SAC",
+    "TOR": "TOR",
+    "UTA": "UTA",
+    "UTAH": "UTA",
+    "WAS": "WAS",
+    "WSH": "WAS",
+}
+NBA_ASSOCIATED_TICKER_RE = re.compile(r"\bKXNBA(?:GAME|TOTAL)-[A-Z0-9]+(?:-[A-Z0-9.]+)?\b")
 ACTION_RANK = {
     "PAPER_BUY_YES": 4,
     "PAPER_BUY_NO": 4,
+    "WATCH_TOTAL": 2,
     "WATCH": 2,
     "NO_TRADE": 0,
 }
@@ -73,8 +117,10 @@ def _team_aliases(code: object, name: object) -> set[str]:
     aliases = {code_text, name_text}
     parts = [part for part in re.split(r"\s+", name_text) if part]
     if parts:
+        aliases.add(parts[0])
         aliases.add(parts[-1])
     if len(parts) >= 2:
+        aliases.add(" ".join(parts[:-1]))
         aliases.add(" ".join(parts[-2:]))
     if len(parts) >= 3 and parts[0].lower() in {"oklahoma", "new", "golden"}:
         aliases.add(" ".join(parts[:2]))
@@ -104,6 +150,7 @@ def _game_from_scoreboard_row(row: dict[str, object]) -> dict[str, object]:
         "minutes_remaining_est": _float(row.get("minutes_remaining_est"), 48.0),
         "predicted_winner": str(row.get("predicted_winner") or ""),
         "confidence": _float(row.get("confidence"), 0.5),
+        "game_time_utc": str(row.get("game_time_utc") or ""),
     }
 
 
@@ -278,6 +325,300 @@ def analyze_nba_market_edges(
         ),
         reverse=True,
     )
+
+
+def _kalshi_team_code(code: object) -> str:
+    code_text = str(code or "").strip().upper()
+    return KALSHI_NBA_TEAM_CODES.get(code_text, code_text)
+
+
+def _kalshi_date_code(game: dict[str, object]) -> str:
+    game_time = str(game.get("game_time_utc") or "").strip()
+    if not game_time:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(game_time.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local_date = parsed.astimezone(ZoneInfo(NBA_SCOREBOARD_TIMEZONE))
+    return local_date.strftime("%y%b%d").upper()
+
+
+def kalshi_nba_event_tickers(scoreboard_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    games = [_game_from_scoreboard_row(row) for row in scoreboard_rows]
+    rows: list[dict[str, object]] = []
+    for game in games:
+        date_code = _kalshi_date_code(game)
+        away_code = _kalshi_team_code(game.get("away"))
+        home_code = _kalshi_team_code(game.get("home"))
+        if not date_code or not away_code or not home_code:
+            continue
+        game_slug = f"{date_code}{away_code}{home_code}"
+        game_event_ticker = f"KXNBAGAME-{game_slug}"
+        total_event_ticker = f"KXNBATOTAL-{game_slug}"
+        rows.append(
+            {
+                "game": game,
+                "game_key": game["game_key"],
+                "game_event_ticker": game_event_ticker,
+                "total_event_ticker": total_event_ticker,
+                "away_market_ticker": f"{game_event_ticker}-{away_code}",
+                "home_market_ticker": f"{game_event_ticker}-{home_code}",
+            }
+        )
+    return rows
+
+
+def _associated_ticker_values(market: dict[str, Any]) -> list[str]:
+    values = [
+        str(market.get("ticker") or ""),
+        str(market.get("event_ticker") or ""),
+        str(market.get("title") or ""),
+        str(market.get("event_title") or ""),
+    ]
+    custom_strike = market.get("custom_strike")
+    if isinstance(custom_strike, dict):
+        values.extend(str(value) for value in custom_strike.values())
+    return values
+
+
+def associated_nba_market_tickers(market: dict[str, Any], event_prefixes: set[str]) -> list[str]:
+    tickers: list[str] = []
+    for value in _associated_ticker_values(market):
+        for match in NBA_ASSOCIATED_TICKER_RE.findall(value):
+            # Event tickers have one dash. Tradable contract tickers include
+            # the final side/line suffix, which is what get_market needs.
+            if match.count("-") < 2:
+                continue
+            if any(match.startswith(f"{prefix}-") for prefix in event_prefixes):
+                tickers.append(match)
+    return _dedupe_tickers(tickers)
+
+
+def _dedupe_tickers(tickers: list[str] | tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for ticker in tickers:
+        ticker = str(ticker or "").strip().upper()
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+        deduped.append(ticker)
+    return deduped
+
+
+def _fetch_market(client: KalshiPublicClient, ticker: str, errors: list[str], quiet_404: bool = True) -> dict[str, Any] | None:
+    try:
+        return client.get_market(ticker)
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else 0
+        if not (quiet_404 and status_code == 404):
+            errors.append(f"{ticker} failed: {exc}")
+    except requests.RequestException as exc:
+        errors.append(f"{ticker} failed: {exc}")
+    return None
+
+
+def _total_line(market: dict[str, Any], ticker: str) -> float:
+    title = str(market.get("title") or "")
+    match = re.search(r"\bOver\s+(\d+(?:\.\d+)?)\b", title, flags=re.IGNORECASE)
+    if match:
+        return _float(match.group(1))
+    suffix = ticker.rsplit("-", 1)[-1]
+    value = _float(suffix, 0.0)
+    if value <= 0:
+        return 0.0
+    if "." not in suffix:
+        return value - 0.5
+    return value
+
+
+def _current_total(game: dict[str, object]) -> int:
+    return int(_float(game.get("away_score")) + _float(game.get("home_score")))
+
+
+def _pace_projected_total(game: dict[str, object]) -> float:
+    current_total = _current_total(game)
+    status = str(game.get("status") or "").lower()
+    if "final" in status:
+        return float(current_total)
+    minutes_remaining = max(0.0, _float(game.get("minutes_remaining_est"), 48.0))
+    elapsed = 48.0 - minutes_remaining
+    if elapsed <= 1.0:
+        return 0.0
+    return current_total / elapsed * 48.0
+
+
+def _rough_over_probability(projected_total: float, line: float, minutes_remaining: float) -> float:
+    if projected_total <= 0 or line <= 0:
+        return 0.0
+    scale = max(6.0, 18.0 * math.sqrt(max(minutes_remaining, 0.5) / 48.0))
+    return 1.0 / (1.0 + math.exp(-(projected_total - line) / scale))
+
+
+def _market_type_from_ticker(ticker: str) -> str:
+    if ticker.startswith("KXNBATOTAL-"):
+        return "TOTAL"
+    if ticker.startswith("KXNBAGAME-"):
+        return "MONEYLINE"
+    return "UNKNOWN"
+
+
+def _side_or_line(market: dict[str, Any], game: dict[str, object], market_type: str) -> str:
+    ticker = str(market.get("ticker") or "")
+    if market_type == "TOTAL":
+        line = _total_line(market, ticker)
+        return f"YES = Over {line:g}" if line else "YES = Over"
+    yes_team = _infer_yes_team(market, game)
+    if yes_team:
+        return f"YES = {yes_team}"
+    suffix = ticker.rsplit("-", 1)[-1]
+    return f"YES = {suffix}" if suffix else ""
+
+
+def _raw_board_row(
+    market: dict[str, Any],
+    game: dict[str, object],
+    config: NBAMarketEdgeConfig,
+) -> dict[str, object]:
+    quote = quote_from_market(market)
+    market_type = _market_type_from_ticker(quote.ticker)
+    edge = _edge_row(market, config) if market_type == "MONEYLINE" else {}
+    line = _total_line(market, quote.ticker) if market_type == "TOTAL" else 0.0
+    projected_total = _pace_projected_total(game) if market_type == "TOTAL" else 0.0
+    minutes_remaining = _float(game.get("minutes_remaining_est"), 48.0)
+    over_probability = _rough_over_probability(projected_total, line, minutes_remaining) if market_type == "TOTAL" else 0.0
+    current_total = _current_total(game)
+
+    if market_type == "TOTAL":
+        action = "WATCH_TOTAL"
+        reason = "Raw total market quote; pace projection is a rough scoreboard heuristic"
+    else:
+        action = str(edge.get("action") or "WATCH")
+        reason = str(edge.get("reason") or "")
+
+    return {
+        "game": game.get("game_key", ""),
+        "status": game.get("status", ""),
+        "period": game.get("period", ""),
+        "clock": game.get("clock", ""),
+        "score": f"{int(_float(game.get('away_score')))}-{int(_float(game.get('home_score')))}",
+        "current_total": current_total,
+        "market_type": market_type,
+        "side_or_line": _side_or_line(market, game, market_type),
+        "ticker": quote.ticker,
+        "title": quote.title,
+        "kalshi_status": str(market.get("status") or ""),
+        "yes_bid": round(quote.yes_bid, 3),
+        "yes_ask": round(quote.yes_ask, 3),
+        "no_bid": round(quote.no_bid, 3),
+        "no_ask": round(quote.no_ask, 3),
+        "spread": round(quote.spread, 3),
+        "volume_24h": round(quote.volume_24h, 2),
+        "open_interest": round(quote.open_interest, 2),
+        "model_probability": edge.get("model_yes_probability", round(over_probability, 3)),
+        "fee_adjusted_edge": edge.get("best_fee_adjusted_edge", 0.0),
+        "projected_total": round(projected_total, 1) if projected_total else 0.0,
+        "total_line": round(line, 1) if line else 0.0,
+        "action": action,
+        "reason": reason,
+        "risk_flags": edge.get("risk_flags", ""),
+        "market_url": ticker_market_url(quote.ticker),
+    }
+
+
+def _game_for_ticker(
+    ticker: str,
+    direct_ticker_to_game: dict[str, dict[str, object]],
+    event_ticker_to_game: dict[str, dict[str, object]],
+) -> dict[str, object] | None:
+    if ticker in direct_ticker_to_game:
+        return direct_ticker_to_game[ticker]
+    for event_ticker, game in event_ticker_to_game.items():
+        if ticker.startswith(f"{event_ticker}-"):
+            return game
+    return None
+
+
+def discover_nba_raw_board(
+    client: KalshiPublicClient,
+    scoreboard_rows: list[dict[str, object]],
+    config: NBAMarketEdgeConfig | None = None,
+    manual_tickers: tuple[str, ...] = (),
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    config = config or NBAMarketEdgeConfig()
+    errors: list[str] = []
+    ticker_rows = kalshi_nba_event_tickers(scoreboard_rows)
+    direct_ticker_to_game: dict[str, dict[str, object]] = {}
+    event_ticker_to_game: dict[str, dict[str, object]] = {}
+    direct_tickers: list[str] = []
+    for row in ticker_rows:
+        game = row["game"]
+        if not isinstance(game, dict):
+            continue
+        game_event_ticker = str(row.get("game_event_ticker") or "")
+        total_event_ticker = str(row.get("total_event_ticker") or "")
+        event_ticker_to_game[game_event_ticker] = game
+        event_ticker_to_game[total_event_ticker] = game
+        for key in ("away_market_ticker", "home_market_ticker"):
+            ticker = str(row.get(key) or "")
+            if ticker:
+                direct_tickers.append(ticker)
+                direct_ticker_to_game[ticker] = game
+
+    scanned_markets: list[dict[str, Any]] = []
+    associated_tickers: list[str] = []
+    event_prefixes = set(event_ticker_to_game)
+    try:
+        scanned_markets = client.get_open_markets(
+            max_markets=config.scan_limit,
+            page_limit=min(1000, max(config.page_limit, 1)),
+            max_pages=config.max_pages,
+        )
+        for market in scanned_markets:
+            associated_tickers.extend(associated_nba_market_tickers(market, event_prefixes))
+    except requests.RequestException as exc:
+        errors.append(f"Kalshi market scan failed: {exc}")
+
+    all_tickers = _dedupe_tickers([*direct_tickers, *associated_tickers, *manual_tickers])
+    markets: list[dict[str, Any]] = []
+    for ticker in all_tickers:
+        game = _game_for_ticker(ticker, direct_ticker_to_game, event_ticker_to_game)
+        if game is None:
+            continue
+        market = _fetch_market(client, ticker, errors)
+        if market is None:
+            continue
+        row = dict(market)
+        row["_nba_game"] = game
+        markets.append(row)
+
+    markets = _dedupe_candidates(markets)
+    enriched = client.enrich_with_orderbooks(markets[: config.orderbook_limit])
+    rows = [_raw_board_row(market, market["_nba_game"], config) for market in enriched if isinstance(market.get("_nba_game"), dict)]
+    rows = sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("game") or ""),
+            0 if row.get("market_type") == "MONEYLINE" else 1,
+            -float(row.get("volume_24h") or 0.0),
+        ),
+    )
+    metadata = {
+        "scoreboard_games": len(ticker_rows),
+        "markets_scanned": len(scanned_markets),
+        "direct_tickers": len(_dedupe_tickers(direct_tickers)),
+        "associated_tickers": len(_dedupe_tickers(associated_tickers)),
+        "markets_found": len(markets),
+        "orderbooks_loaded": len(enriched),
+        "game_markets": sum(1 for row in rows if row.get("market_type") == "MONEYLINE"),
+        "total_markets": sum(1 for row in rows if row.get("market_type") == "TOTAL"),
+        "actionable": sum(1 for row in rows if str(row.get("action") or "").startswith("PAPER_BUY")),
+        "errors": errors[:10],
+    }
+    return rows, metadata
 
 
 def discover_nba_market_edges(

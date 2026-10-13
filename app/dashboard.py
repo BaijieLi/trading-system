@@ -28,6 +28,7 @@ from kalshi_trading_system.models.edge import analyze_markets, ticker_market_url
 from kalshi_trading_system.models.nba_market_edge import (  # noqa: E402
     NBAMarketEdgeConfig,
     discover_nba_market_edges,
+    discover_nba_raw_board,
 )
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
@@ -54,6 +55,7 @@ NBA_EDGE_ROW_FIELDS = (
     "home_name",
     "home_score",
     "home_win_prob",
+    "game_time_utc",
     "status",
     "period",
     "clock",
@@ -129,6 +131,33 @@ def load_nba_market_edges(
         max_spread=max_spread,
     )
     rows, metadata = discover_nba_market_edges(
+        client,
+        scoreboard_rows,
+        config=config,
+        manual_tickers=manual_tickers,
+    )
+    return pd.DataFrame(rows), metadata
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def load_nba_kalshi_board(
+    scoreboard_signature: tuple[tuple[object, ...], ...],
+    scan_limit: int,
+    orderbook_limit: int,
+    min_edge: float,
+    max_spread: float,
+    manual_tickers: tuple[str, ...],
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    scoreboard_rows = [dict(zip(NBA_EDGE_ROW_FIELDS, values, strict=False)) for values in scoreboard_signature]
+    client = KalshiPublicClient()
+    config = NBAMarketEdgeConfig(
+        scan_limit=scan_limit,
+        max_pages=max(1, (scan_limit + 199) // 200),
+        orderbook_limit=orderbook_limit,
+        min_edge=min_edge,
+        max_spread=max_spread,
+    )
+    rows, metadata = discover_nba_raw_board(
         client,
         scoreboard_rows,
         config=config,
@@ -498,12 +527,12 @@ with tab_nba:
     st.divider()
     st.subheader("NBA vs Kalshi Market Edge")
     st.caption(
-        "This is not the scoreboard. It only tries to find tradable Kalshi markets for the NBA games shown above, "
-        "then compares the scoreboard win-probability heuristic against live order books after fees and spread."
+        "This section shows raw Kalshi NBA moneyline and total-market quotes for the games above first. "
+        "The action column remains paper-only and uses a simple score-clock heuristic, not financial advice."
     )
     edge_cols = st.columns(5)
     compare_kalshi_nba = edge_cols[0].checkbox("Compare Kalshi markets", value=True)
-    nba_edge_scan_limit = edge_cols[1].slider("Event scan cap", min_value=100, max_value=1000, value=500, step=100)
+    nba_edge_scan_limit = edge_cols[1].slider("Market scan cap", min_value=100, max_value=3000, value=1000, step=100)
     nba_edge_orderbooks = edge_cols[2].slider("Orderbook cap", min_value=5, max_value=50, value=30, step=5)
     nba_edge_min = edge_cols[3].slider("Min edge", min_value=0.03, max_value=0.20, value=0.08, step=0.01)
     nba_edge_spread = edge_cols[4].slider("Max spread", min_value=0.02, max_value=0.15, value=0.06, step=0.01)
@@ -521,11 +550,10 @@ with tab_nba:
     if nba_df.empty:
         st.info("Load a scoreboard first before comparing against Kalshi markets.")
     elif compare_kalshi_nba:
-        with st.spinner("Scanning bounded Kalshi NBA candidates..."):
-            nba_edge_df, nba_edge_metadata = load_nba_market_edges(
+        with st.spinner("Loading live Kalshi NBA moneyline and total quotes..."):
+            nba_board_df, nba_board_metadata = load_nba_kalshi_board(
                 nba_edge_signature(nba_df),
                 nba_edge_scan_limit,
-                max(nba_edge_orderbooks * 2, 10),
                 nba_edge_orderbooks,
                 nba_edge_min,
                 nba_edge_spread,
@@ -533,59 +561,61 @@ with tab_nba:
             )
         edge_metric_cols = st.columns(6)
         edge_metric_cols[0].metric("NBA games above", len(nba_df))
-        edge_metric_cols[1].metric("Kalshi events scanned", int(nba_edge_metadata.get("events_scanned") or 0))
-        edge_metric_cols[2].metric("Kalshi game candidates", int(nba_edge_metadata.get("candidates") or 0))
-        edge_metric_cols[3].metric("orderbooks", int(nba_edge_metadata.get("orderbooks_loaded") or 0))
-        edge_metric_cols[4].metric("matched edges", int(nba_edge_metadata.get("matched_edges") or 0))
-        edge_metric_cols[5].metric("paper actionable", int(nba_edge_metadata.get("actionable") or 0))
-        edge_errors = nba_edge_metadata.get("errors") or []
+        edge_metric_cols[1].metric("Kalshi markets scanned", int(nba_board_metadata.get("markets_scanned") or 0))
+        edge_metric_cols[2].metric("quotes found", int(nba_board_metadata.get("markets_found") or 0))
+        edge_metric_cols[3].metric("moneyline", int(nba_board_metadata.get("game_markets") or 0))
+        edge_metric_cols[4].metric("totals", int(nba_board_metadata.get("total_markets") or 0))
+        edge_metric_cols[5].metric("paper actionable", int(nba_board_metadata.get("actionable") or 0))
+        edge_errors = nba_board_metadata.get("errors") or []
         if edge_errors:
             st.warning(" | ".join(str(error) for error in edge_errors))
-        if nba_edge_df.empty:
+        if nba_board_df.empty:
             st.info(
-                "NBA games exist in the scoreboard above, but this scan did not find a Kalshi single-game market "
-                "that can be safely mapped to those teams. Kalshi may only be returning futures, season markets, "
-                "or combo markets for these teams. If you see a specific game ticker on Kalshi, paste it above."
+                "NBA games exist in the scoreboard above, but no Kalshi NBA moneyline/total quotes were found. "
+                "If you see a specific game ticker on Kalshi, paste it above."
             )
         else:
-            nba_edge_cols = [
+            st.caption(
+                "YES/NO bid/ask are Kalshi live quote fields. For TOTAL rows, YES usually means the Over side. "
+                "For MONEYLINE rows, YES means the team shown in side_or_line wins."
+            )
+            nba_board_cols = [
                 "game",
                 "status",
                 "period",
                 "clock",
                 "score",
-                "predicted_winner",
-                "confidence",
+                "current_total",
+                "market_type",
+                "side_or_line",
                 "action",
-                "yes_team",
-                "model_yes_probability",
-                "kalshi_midpoint",
+                "model_probability",
+                "fee_adjusted_edge",
+                "total_line",
+                "projected_total",
                 "yes_bid",
                 "yes_ask",
                 "no_bid",
                 "no_ask",
                 "spread",
-                "fee_adjusted_yes_edge",
-                "fee_adjusted_no_edge",
-                "best_fee_adjusted_edge",
-                "expected_roi",
                 "volume_24h",
                 "open_interest",
+                "kalshi_status",
                 "risk_flags",
                 "title",
                 "market_url",
             ]
-            visible_edge_cols = [col for col in nba_edge_cols if col in nba_edge_df.columns]
+            visible_edge_cols = [col for col in nba_board_cols if col in nba_board_df.columns]
             st.dataframe(
-                nba_edge_df[visible_edge_cols],
+                nba_board_df[visible_edge_cols],
                 use_container_width=True,
                 hide_index=True,
                 column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
             )
             st.download_button(
-                "Download NBA/Kalshi edge CSV",
-                nba_edge_df[visible_edge_cols].to_csv(index=False).encode("utf-8"),
-                file_name="nba_kalshi_edge.csv",
+                "Download NBA/Kalshi board CSV",
+                nba_board_df[visible_edge_cols].to_csv(index=False).encode("utf-8"),
+                file_name="nba_kalshi_board.csv",
                 mime="text/csv",
             )
 
