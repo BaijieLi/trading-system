@@ -30,6 +30,10 @@ from kalshi_trading_system.models.nba_market_edge import (  # noqa: E402
     discover_nba_market_edges,
     discover_nba_raw_board,
 )
+from kalshi_trading_system.models.tennis_observer import (  # noqa: E402
+    TennisObserverConfig,
+    discover_tennis_watchlist,
+)
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
     latest_signal_snapshot,
@@ -162,6 +166,31 @@ def load_nba_kalshi_board(
         scoreboard_rows,
         config=config,
         manual_tickers=manual_tickers,
+    )
+    return pd.DataFrame(rows), metadata
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def load_tennis_watchlist(
+    scan_limit: int,
+    candidate_limit: int,
+    orderbook_limit: int,
+    max_spread: float,
+    min_volume_24h: float,
+    min_open_interest: float,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    client = KalshiPublicClient()
+    rows, metadata = discover_tennis_watchlist(
+        client,
+        TennisObserverConfig(
+            scan_limit=scan_limit,
+            max_pages=max(1, (scan_limit + 999) // 1000),
+            candidate_limit=candidate_limit,
+            orderbook_limit=orderbook_limit,
+            max_spread=max_spread,
+            min_volume_24h=min_volume_24h,
+            min_open_interest=min_open_interest,
+        ),
     )
     return pd.DataFrame(rows), metadata
 
@@ -346,8 +375,8 @@ display_cols = [
     "market_url",
 ]
 
-tab_cloud, tab_monitor, tab_signals, tab_nba, tab_paper, tab_notes = st.tabs(
-    ["Cloud", "Monitor", "Signals", "NBA Live", "Paper Trades", "Reality Check"]
+tab_cloud, tab_monitor, tab_signals, tab_nba, tab_tennis, tab_paper, tab_notes = st.tabs(
+    ["Cloud", "Monitor", "Signals", "NBA Live", "Tennis", "Paper Trades", "Reality Check"]
 )
 
 with tab_cloud:
@@ -622,6 +651,76 @@ with tab_nba:
                 file_name="nba_kalshi_board.csv",
                 mime="text/csv",
             )
+
+with tab_tennis:
+    st.subheader("Tennis Watchlist")
+    st.caption(
+        "Tennis is observation-only here. Kalshi tennis prices move quickly point-by-point, and this app does not "
+        "have an independent player model yet, so it ranks market quality instead of issuing buy signals."
+    )
+    tennis_cols = st.columns(6)
+    tennis_scan_limit = tennis_cols[0].slider("Tennis scan cap", min_value=500, max_value=3000, value=2500, step=250)
+    tennis_candidates = tennis_cols[1].slider("Tennis candidates", min_value=20, max_value=160, value=120, step=20)
+    tennis_orderbooks = tennis_cols[2].slider("Tennis orderbooks", min_value=10, max_value=80, value=40, step=10)
+    tennis_spread = tennis_cols[3].slider("Tennis max spread", min_value=0.01, max_value=0.15, value=0.06, step=0.01)
+    tennis_min_volume = tennis_cols[4].number_input("Min volume", min_value=0.0, max_value=100000.0, value=1000.0, step=500.0)
+    tennis_min_oi = tennis_cols[5].number_input("Min open interest", min_value=0.0, max_value=100000.0, value=1000.0, step=500.0)
+
+    with st.spinner("Loading Kalshi tennis markets..."):
+        tennis_df, tennis_metadata = load_tennis_watchlist(
+            tennis_scan_limit,
+            tennis_candidates,
+            tennis_orderbooks,
+            tennis_spread,
+            tennis_min_volume,
+            tennis_min_oi,
+        )
+    tennis_metric_cols = st.columns(5)
+    tennis_metric_cols[0].metric("markets scanned", int(tennis_metadata.get("markets_scanned") or 0))
+    tennis_metric_cols[1].metric("candidate tickers", int(tennis_metadata.get("candidate_tickers") or 0))
+    tennis_metric_cols[2].metric("quotes found", int(tennis_metadata.get("markets_found") or 0))
+    tennis_metric_cols[3].metric("orderbooks", int(tennis_metadata.get("orderbooks_loaded") or 0))
+    tennis_metric_cols[4].metric("watch liquid", int(tennis_metadata.get("watch_liquid") or 0))
+    tennis_errors = tennis_metadata.get("errors") or []
+    if tennis_errors:
+        st.warning(" | ".join(str(error) for error in tennis_errors))
+    if tennis_df.empty:
+        st.info("No tennis markets found in the current bounded Kalshi scan.")
+    else:
+        tennis_cols_display = [
+            "action",
+            "stability_score",
+            "series_ticker",
+            "title",
+            "yes_bid",
+            "yes_ask",
+            "no_bid",
+            "no_ask",
+            "spread",
+            "midpoint",
+            "volume_24h",
+            "open_interest",
+            "kalshi_status",
+            "risk_flags",
+            "market_url",
+            "hub_url",
+        ]
+        visible_tennis_cols = [col for col in tennis_cols_display if col in tennis_df.columns]
+        st.dataframe(
+            tennis_df[visible_tennis_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "market_url": st.column_config.LinkColumn("market_url", display_text="Open"),
+                "hub_url": st.column_config.LinkColumn("hub_url", display_text="Tennis Hub"),
+            },
+        )
+        st.download_button(
+            "Download tennis watchlist CSV",
+            tennis_df[visible_tennis_cols].to_csv(index=False).encode("utf-8"),
+            file_name="tennis_watchlist.csv",
+            mime="text/csv",
+        )
 
 with tab_paper:
     st.subheader("Paper Trade One Signal")
