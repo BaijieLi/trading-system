@@ -498,8 +498,8 @@ with tab_nba:
     st.divider()
     st.subheader("NBA vs Kalshi Market Edge")
     st.caption(
-        "Bounded paper-trading scanner: it looks for Kalshi markets that mention both teams in a live NBA game, "
-        "then compares the scoreboard win-probability heuristic against the live order book after fees and spread."
+        "This is not the scoreboard. It only tries to find tradable Kalshi markets for the NBA games shown above, "
+        "then compares the scoreboard win-probability heuristic against live order books after fees and spread."
     )
     edge_cols = st.columns(5)
     compare_kalshi_nba = edge_cols[0].checkbox("Compare Kalshi markets", value=True)
@@ -531,19 +531,21 @@ with tab_nba:
                 nba_edge_spread,
                 manual_nba_tickers,
             )
-        edge_metric_cols = st.columns(5)
-        edge_metric_cols[0].metric("events scanned", int(nba_edge_metadata.get("events_scanned") or 0))
-        edge_metric_cols[1].metric("candidates", int(nba_edge_metadata.get("candidates") or 0))
-        edge_metric_cols[2].metric("orderbooks", int(nba_edge_metadata.get("orderbooks_loaded") or 0))
-        edge_metric_cols[3].metric("matched edges", int(nba_edge_metadata.get("matched_edges") or 0))
-        edge_metric_cols[4].metric("paper actionable", int(nba_edge_metadata.get("actionable") or 0))
+        edge_metric_cols = st.columns(6)
+        edge_metric_cols[0].metric("NBA games above", len(nba_df))
+        edge_metric_cols[1].metric("Kalshi events scanned", int(nba_edge_metadata.get("events_scanned") or 0))
+        edge_metric_cols[2].metric("Kalshi game candidates", int(nba_edge_metadata.get("candidates") or 0))
+        edge_metric_cols[3].metric("orderbooks", int(nba_edge_metadata.get("orderbooks_loaded") or 0))
+        edge_metric_cols[4].metric("matched edges", int(nba_edge_metadata.get("matched_edges") or 0))
+        edge_metric_cols[5].metric("paper actionable", int(nba_edge_metadata.get("actionable") or 0))
         edge_errors = nba_edge_metadata.get("errors") or []
         if edge_errors:
             st.warning(" | ".join(str(error) for error in edge_errors))
         if nba_edge_df.empty:
             st.info(
-                "No safely mappable NBA game markets found in the bounded Kalshi scan. "
-                "If you see a specific Kalshi ticker, paste it above."
+                "NBA games exist in the scoreboard above, but this scan did not find a Kalshi single-game market "
+                "that can be safely mapped to those teams. Kalshi may only be returning futures, season markets, "
+                "or combo markets for these teams. If you see a specific game ticker on Kalshi, paste it above."
             )
         else:
             nba_edge_cols = [
