@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import math
+import re
 from typing import Any
 
 import requests
@@ -39,6 +41,98 @@ def _parse_iso(value: str) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _parse_clock_minutes(clock: object) -> float:
+    text = str(clock or "").strip()
+    if not text or text in {"0", "0.0"}:
+        return 0.0
+    if text.startswith("PT"):
+        minutes = re.search(r"(\d+(?:\.\d+)?)M", text)
+        seconds = re.search(r"(\d+(?:\.\d+)?)S", text)
+        minute_value = float(minutes.group(1)) if minutes else 0.0
+        second_value = float(seconds.group(1)) / 60.0 if seconds else 0.0
+        return minute_value + second_value
+    if ":" in text:
+        left, right = text.split(":", 1)
+        try:
+            return float(left) + float(right) / 60.0
+        except ValueError:
+            return 0.0
+    try:
+        return float(text) / 60.0 if float(text) > 12 else float(text)
+    except ValueError:
+        return 0.0
+
+
+def estimate_minutes_remaining(period: int, clock: object, status: str) -> float:
+    status_lower = status.lower()
+    if "final" in status_lower:
+        return 0.0
+    if period <= 0:
+        return 48.0
+    clock_minutes = _parse_clock_minutes(clock)
+    if period <= 4:
+        return max(0.0, (4 - period) * 12.0 + clock_minutes)
+    return max(0.0, clock_minutes)
+
+
+def estimate_win_probability(row: dict[str, object]) -> dict[str, object]:
+    status = str(row.get("status") or "")
+    away_score = _safe_int(row.get("away_score"))
+    home_score = _safe_int(row.get("home_score"))
+    period = _safe_int(row.get("period"))
+    home = str(row.get("home") or "HOME")
+    away = str(row.get("away") or "AWAY")
+    margin = home_score - away_score
+    minutes_remaining = estimate_minutes_remaining(period, row.get("clock"), status)
+    status_lower = status.lower()
+
+    if "final" in status_lower:
+        if margin > 0:
+            home_probability = 1.0
+        elif margin < 0:
+            home_probability = 0.0
+        else:
+            home_probability = 0.5
+        note = "Final result"
+    elif "scheduled" in status_lower or period <= 0:
+        home_probability = 0.5
+        note = "Pregame placeholder; no team-strength model"
+    else:
+        scale = max(3.5, 14.0 * math.sqrt(max(minutes_remaining, 0.5) / 48.0))
+        home_probability = 1.0 / (1.0 + math.exp(-margin / scale))
+        note = "Score-clock heuristic; not a betting line"
+
+    away_probability = 1.0 - home_probability
+    if home_probability > away_probability:
+        predicted_winner = home
+        confidence = home_probability
+    elif away_probability > home_probability:
+        predicted_winner = away
+        confidence = away_probability
+    else:
+        predicted_winner = "Toss-up"
+        confidence = 0.5
+
+    return {
+        "predicted_winner": predicted_winner,
+        "home_win_prob": round(home_probability, 3),
+        "away_win_prob": round(away_probability, 3),
+        "confidence": round(confidence, 3),
+        "score_margin_home": margin,
+        "minutes_remaining_est": round(minutes_remaining, 2),
+        "prediction_note": note,
+    }
+
+
+def add_win_predictions(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    enriched: list[dict[str, object]] = []
+    for row in rows:
+        next_row = dict(row)
+        next_row.update(estimate_win_probability(next_row))
+        enriched.append(next_row)
+    return enriched
 
 
 def _espn_team(competitors: list[dict[str, Any]], home_away: str) -> dict[str, Any]:
@@ -81,7 +175,7 @@ def parse_espn_scoreboard(payload: dict[str, Any], fetched_at: datetime | None =
             }
         )
     return ScoreboardResult(
-        rows=rows,
+        rows=add_win_predictions(rows),
         metadata={
             "source": "ESPN",
             "fetched_at": fetched_at.isoformat(),
@@ -119,7 +213,7 @@ def parse_nba_livedata_scoreboard(payload: dict[str, Any], fetched_at: datetime 
             }
         )
     return ScoreboardResult(
-        rows=rows,
+        rows=add_win_predictions(rows),
         metadata={
             "source": "NBA liveData",
             "fetched_at": fetched_at.isoformat(),
