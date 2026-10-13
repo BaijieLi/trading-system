@@ -604,13 +604,17 @@ with tab_nba:
                 "risk_flags",
                 "title",
                 "market_url",
+                "hub_url",
             ]
             visible_edge_cols = [col for col in nba_board_cols if col in nba_board_df.columns]
             st.dataframe(
                 nba_board_df[visible_edge_cols],
                 use_container_width=True,
                 hide_index=True,
-                column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
+                column_config={
+                    "market_url": st.column_config.LinkColumn("market_url", display_text="Open"),
+                    "hub_url": st.column_config.LinkColumn("hub_url", display_text="NBA Hub"),
+                },
             )
             st.download_button(
                 "Download NBA/Kalshi board CSV",

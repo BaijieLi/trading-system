@@ -7,6 +7,13 @@ from kalshi_trading_system.models.fees import estimate_fee_dollars
 from kalshi_trading_system.models.orderbook import Quote, quote_from_market
 
 
+MARKET_PAGE_SERIES_SLUGS = {
+    "KXNBAGAME": "nba-game",
+    "KXNBATOTAL": "nba-total",
+    "KXNFLGAME": "nfl-game",
+}
+
+
 @dataclass(frozen=True)
 class Signal:
     ticker: str
@@ -35,6 +42,9 @@ def ticker_market_url(ticker: object) -> str:
     ticker = str(ticker or "").strip()
     if not ticker:
         return "https://kalshi.com/browse"
+    series = ticker.split("-", 1)[0].upper()
+    if series in MARKET_PAGE_SERIES_SLUGS:
+        return f"https://kalshi.com/markets/{series.lower()}/{MARKET_PAGE_SERIES_SLUGS[series]}/{ticker.lower()}"
     # Kalshi's public /markets pages are slug-based and can render empty when
     # opened with only an event ticker. The classic ticker route resolves the
     # exact contract from the API ticker, which is safer for dashboard links.

@@ -30,6 +30,12 @@ def test_market_url_uses_ticker_resolver() -> None:
     )
 
 
+def test_market_url_uses_known_kalshi_market_routes_for_sports() -> None:
+    assert market_url("KXNBAGAME-26OCT12MINNYK", "KXNBAGAME-26OCT12MINNYK-MIN") == (
+        "https://kalshi.com/markets/kxnbagame/nba-game/kxnbagame-26oct12minnyk-min"
+    )
+
+
 def test_refresh_market_urls_replaces_stale_event_links() -> None:
     rows = [
         {

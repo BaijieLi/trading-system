@@ -526,6 +526,7 @@ def _raw_board_row(
         "reason": reason,
         "risk_flags": edge.get("risk_flags", ""),
         "market_url": ticker_market_url(quote.ticker),
+        "hub_url": "https://kalshi.com/hubs/nba",
     }
 
 
