@@ -1,4 +1,4 @@
-from kalshi_trading_system.models.edge import analyze_market
+from kalshi_trading_system.models.edge import analyze_market, market_url
 
 
 def test_analyze_market_blocks_illiquid_market() -> None:
@@ -23,3 +23,8 @@ def test_analyze_market_detects_manual_yes_edge() -> None:
     assert signal.action == "BUY_YES_PAPER"
     assert signal.expected_value > 0
 
+
+def test_market_url_uses_ticker_resolver() -> None:
+    assert market_url("KXEVENT", "KXEVENT-26JAN01-Y") == (
+        "https://kalshi.com/markets_by_ticker/kxevent-26jan01-y"
+    )

@@ -12,6 +12,7 @@ This project is intentionally conservative. It does **not** place real orders. I
 - Calculates fee-adjusted expected value for YES and NO.
 - Shows paper-only BUY/NO_TRADE/WATCH signals.
 - Tracks open paper positions and generates SELL/HOLD exit guidance from the latest bid, fair probability, unrealized PnL, and remaining edge.
+- Links each signal to Kalshi's ticker resolver so the exact contract can be opened from the dashboard.
 - Can run a broader market discovery scan that ranks liquid candidates before loading orderbooks.
 - Tracks memory usage so it does not overload your computer.
 - Saves signal snapshots, paper trades, and paper exits to SQLite.

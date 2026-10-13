@@ -32,9 +32,13 @@ class Signal:
 
 
 def market_url(event_ticker: str, ticker: str) -> str:
-    if event_ticker:
-        return f"https://kalshi.com/markets/{event_ticker}"
-    return f"https://kalshi.com/markets/{ticker}"
+    del event_ticker
+    if not ticker:
+        return "https://kalshi.com/browse"
+    # Kalshi's public /markets pages are slug-based and can render empty when
+    # opened with only an event ticker. The classic ticker route resolves the
+    # exact contract from the API ticker, which is safer for dashboard links.
+    return f"https://kalshi.com/markets_by_ticker/{ticker.lower()}"
 
 
 def estimate_fair_probability(quote: Quote, manual_fair: float | None = None) -> float:
@@ -117,4 +121,3 @@ def analyze_markets(markets: list[dict[str, object]], manual_fair: dict[str, flo
     manual_fair = manual_fair or {}
     signals = [analyze_market(market, manual_fair=manual_fair.get(str(market.get("ticker") or ""))) for market in markets]
     return sorted((signal.to_dict() for signal in signals), key=lambda row: float(row["expected_value"]), reverse=True)
-
