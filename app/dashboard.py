@@ -19,7 +19,7 @@ from kalshi_trading_system.config import DEFAULT_SERIES, SETTINGS  # noqa: E402
 from kalshi_trading_system.execution.exit_strategy import SELL_ACTIONS, evaluate_open_positions  # noqa: E402
 from kalshi_trading_system.execution.paper_broker import simulate_trade  # noqa: E402
 from kalshi_trading_system.models.discovery import DiscoveryConfig, discover_market_signals  # noqa: E402
-from kalshi_trading_system.models.edge import analyze_markets  # noqa: E402
+from kalshi_trading_system.models.edge import analyze_markets, ticker_market_url  # noqa: E402
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
     latest_signal_snapshot,
@@ -105,6 +105,14 @@ def parse_manual_fair(text: str) -> dict[str, float]:
     return overrides
 
 
+def refresh_dataframe_market_urls(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "ticker" not in df.columns:
+        return df
+    next_df = df.copy()
+    next_df["market_url"] = next_df["ticker"].map(ticker_market_url)
+    return next_df
+
+
 st.title("Kalshi Trading Radar")
 st.caption("Public data scanner, fee/spread-adjusted edge calculator, and paper-trading dashboard.")
 
@@ -188,12 +196,14 @@ with st.spinner("Loading public Kalshi markets and orderbooks..."):
         discovery_candidates,
         discovery_final_limit,
     )
+df = refresh_dataframe_market_urls(df)
 
 if not df.empty and manual_fair and not discover:
     # Recalculate only the displayed rows when manual overrides are entered.
     client = KalshiPublicClient()
     markets = client.enrich_with_orderbooks(client.get_markets(series_tickers=list(series), max_markets=max_markets))
     df = pd.DataFrame(analyze_markets(markets, manual_fair=manual_fair))
+    df = refresh_dataframe_market_urls(df)
 elif manual_fair and discover:
     st.info("Manual fair overrides are applied only in fixed-series mode. Discovery mode ranks the broad watchlist first.")
 
@@ -255,7 +265,7 @@ with tab_cloud:
             cloud_cols[3].metric("actionable", metadata.get("actionable_count", 0))
             st.caption(str(cloud_heartbeat.get("message", "")))
         if cloud_rows:
-            cloud_df = pd.DataFrame(cloud_rows)
+            cloud_df = refresh_dataframe_market_urls(pd.DataFrame(cloud_rows))
             available_cols = [col for col in display_cols if col in cloud_df.columns]
             st.dataframe(
                 cloud_df[available_cols],
@@ -298,7 +308,7 @@ with tab_monitor:
             f"from source={latest_snapshot['source']}"
         )
         if snapshot_rows:
-            snapshot_df = pd.DataFrame(snapshot_rows)
+            snapshot_df = refresh_dataframe_market_urls(pd.DataFrame(snapshot_rows))
             available_snapshot_cols = [col for col in display_cols if col in snapshot_df.columns]
             st.dataframe(
                 snapshot_df[available_snapshot_cols],

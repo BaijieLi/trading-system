@@ -1,4 +1,4 @@
-from kalshi_trading_system.models.edge import analyze_market, market_url
+from kalshi_trading_system.models.edge import analyze_market, market_url, refresh_market_urls
 
 
 def test_analyze_market_blocks_illiquid_market() -> None:
@@ -27,4 +27,19 @@ def test_analyze_market_detects_manual_yes_edge() -> None:
 def test_market_url_uses_ticker_resolver() -> None:
     assert market_url("KXEVENT", "KXEVENT-26JAN01-Y") == (
         "https://kalshi.com/markets_by_ticker/kxevent-26jan01-y"
+    )
+
+
+def test_refresh_market_urls_replaces_stale_event_links() -> None:
+    rows = [
+        {
+            "ticker": "KXBTCD-26OCT1317-T92249.99",
+            "market_url": "https://kalshi.com/markets/kxbtcd-26oct1317",
+        }
+    ]
+
+    refreshed = refresh_market_urls(rows)
+
+    assert refreshed[0]["market_url"] == (
+        "https://kalshi.com/markets_by_ticker/kxbtcd-26oct1317-t92249.99"
     )

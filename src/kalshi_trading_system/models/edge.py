@@ -31,14 +31,28 @@ class Signal:
         return asdict(self)
 
 
-def market_url(event_ticker: str, ticker: str) -> str:
-    del event_ticker
+def ticker_market_url(ticker: object) -> str:
+    ticker = str(ticker or "").strip()
     if not ticker:
         return "https://kalshi.com/browse"
     # Kalshi's public /markets pages are slug-based and can render empty when
     # opened with only an event ticker. The classic ticker route resolves the
     # exact contract from the API ticker, which is safer for dashboard links.
     return f"https://kalshi.com/markets_by_ticker/{ticker.lower()}"
+
+
+def market_url(event_ticker: str, ticker: str) -> str:
+    del event_ticker
+    return ticker_market_url(ticker)
+
+
+def refresh_market_urls(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    refreshed: list[dict[str, object]] = []
+    for row in rows:
+        next_row = dict(row)
+        next_row["market_url"] = ticker_market_url(next_row.get("ticker"))
+        refreshed.append(next_row)
+    return refreshed
 
 
 def estimate_fair_probability(quote: Quote, manual_fair: float | None = None) -> float:
