@@ -304,6 +304,8 @@ def _risk_flags(
     status = str(game.get("status") or "").lower()
     if "final" in status:
         flags.append("GAME_FINAL")
+    if "scheduled" in status or "pre" in status or _float(game.get("period")) <= 0:
+        flags.append("PREGAME_PLACEHOLDER_MODEL")
     minutes_remaining = _float(game.get("minutes_remaining_est"), 48.0)
     if 0 < minutes_remaining <= config.min_minutes_remaining:
         flags.append("LATE_GAME_VOLATILITY")

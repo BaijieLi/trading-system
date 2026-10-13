@@ -110,6 +110,27 @@ def test_analyze_nba_market_edges_blocks_ambiguous_yes_team() -> None:
     assert "CANNOT_INFER_YES_TEAM" in rows[0]["risk_flags"]
 
 
+def test_analyze_nba_market_edges_blocks_pregame_placeholder_probability() -> None:
+    candidate = liquid_market("Will the Atlanta Hawks win?")
+    candidate["_nba_game"] = {
+        "game_key": "OKC@ATL",
+        "away": "OKC",
+        "away_aliases": {"OKC", "Oklahoma City Thunder", "Thunder"},
+        "away_win_prob": 0.5,
+        "home": "ATL",
+        "home_aliases": {"ATL", "Atlanta Hawks", "Hawks"},
+        "home_win_prob": 0.5,
+        "status": "Scheduled",
+        "period": 0,
+        "minutes_remaining_est": 48.0,
+    }
+
+    rows = analyze_nba_market_edges([candidate], NBAMarketEdgeConfig(min_edge=0.08, max_spread=0.08))
+
+    assert rows[0]["action"] == "NO_TRADE"
+    assert "PREGAME_PLACEHOLDER_MODEL" in rows[0]["risk_flags"]
+
+
 def test_discover_nba_market_edges_uses_bounded_client_scan() -> None:
     class FakeClient:
         def get_open_events(self, max_events, page_limit, max_pages):
