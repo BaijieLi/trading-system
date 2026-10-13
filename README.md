@@ -16,9 +16,10 @@ This project is intentionally conservative. It does **not** place real orders. I
 - Can run a broader market discovery scan that ranks liquid candidates before loading orderbooks.
 - Tracks memory usage so it does not overload your computer.
 - Saves signal snapshots, paper trades, and paper exits to SQLite.
-- Defaults to sports markets: NBA, NFL, MLB, NHL, and tennis.
+- Defaults to tennis markets: ATP/WTA/ITF match, set-winner, and game-total series.
 - Includes an NBA live scoreboard tab that uses ESPN as the primary live source and compares it against NBA liveData to flag stale provider responses.
 - Adds a transparent NBA score-clock win probability heuristic for live games, finals, and scheduled games.
+- Includes a live tennis tab that reads Kalshi's tennis page payload for current matches, set/game score, YES/NO quotes, and paper-only action labels.
 
 ## What It Does Not Do
 
@@ -54,7 +55,7 @@ Discovery mode first scans open market metadata, filters out low-liquidity marke
 ## Run the Background Monitor
 
 The dashboard is for viewing and manual paper trades. The monitor is the process that keeps saving snapshots even when the browser is closed.
-By default, the monitor watches only sports series: NBA, NFL, MLB, NHL, and tennis.
+By default, the monitor watches only tennis series so BTC/weather/index rows do not crowd out the live sports view.
 
 ```bash
 cd /Users/libaijie/Downloads/Github_project/kalshi-trading-system
@@ -98,7 +99,7 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-anon-key
 ```
 
-The monitor replaces `market_state` every scan, samples `market_observations` every 5 minutes, and cleans old history so Supabase Free is not filled by 30-second full snapshots. Replacing the latest table prevents old BTC/weather/index rows from appearing after switching to sports. See `docs/supabase/README.md`.
+The monitor replaces `market_state` every scan, samples `market_observations` every 5 minutes, and cleans old history so Supabase Free is not filled by 30-second full snapshots. Replacing the latest table prevents old BTC/weather/index rows from appearing after switching to tennis. See `docs/supabase/README.md`.
 
 ## Safety Defaults
 
@@ -142,3 +143,16 @@ The Streamlit dashboard includes an `NBA Live` tab for checking current NBA scor
 The same tab also shows `predicted_winner`, `home_win_prob`, `away_win_prob`, and `confidence`. This is a simple score-clock heuristic: finals are assigned to the actual winner, scheduled games are treated as 50/50 unless a future team-strength model is added, and live games use current score margin plus estimated minutes remaining. It is for situational awareness, not a betting line.
 
 The `NBA vs Kalshi Market Edge` section performs a bounded scan of open Kalshi events, keeps only markets that mention both teams in a listed NBA game, loads a capped number of orderbooks, and compares the model win probability against fee-adjusted YES/NO prices. It stays paper-only and blocks ambiguous markets where the dashboard cannot infer which team a YES contract represents.
+
+## Live Tennis Matches
+
+The Streamlit dashboard includes a `Tennis` tab for live Kalshi tennis matches. It reads the public tennis hub payload, extracts current match cards, set score, current game score, server, YES/NO bid-ask, spread, and ticker links.
+
+Action labels are paper-only:
+
+- `BUY_YES_PAPER`: the score/price heuristic favors buying the listed player to win.
+- `BUY_NO_PAPER`: the score/price heuristic favors buying against the listed player.
+- `WATCH_LIVE`: the match is tradable enough to observe, but the fee-adjusted edge is not strong enough.
+- `NO_TRADE`: blocked by missing score data, crossed quotes, wide spread, or missing two-sided liquidity.
+
+The tennis heuristic is deliberately simple and should be treated as a screening tool, not financial advice. It is useful for spotting mismatches between live score state and Kalshi's visible quotes, then doing human review before any real decision.

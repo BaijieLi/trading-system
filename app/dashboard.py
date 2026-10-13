@@ -34,6 +34,7 @@ from kalshi_trading_system.models.tennis_observer import (  # noqa: E402
     TennisObserverConfig,
     discover_tennis_watchlist,
 )
+from kalshi_trading_system.models.tennis_live import fetch_tennis_live_board  # noqa: E402
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
     latest_signal_snapshot,
@@ -195,6 +196,12 @@ def load_tennis_watchlist(
     return pd.DataFrame(rows), metadata
 
 
+@st.cache_data(ttl=10, show_spinner=False)
+def load_tennis_live_board() -> tuple[pd.DataFrame, dict[str, object]]:
+    rows, metadata = fetch_tennis_live_board()
+    return pd.DataFrame(rows), metadata
+
+
 def age_label(iso_timestamp: str) -> str:
     try:
         value = datetime.fromisoformat(iso_timestamp)
@@ -251,11 +258,11 @@ st.warning(
 )
 
 with st.sidebar:
-    st.header("Sports Market Universe")
+    st.header("Tennis Market Universe")
     series_text = st.text_area(
         "Series tickers",
         value=",".join(DEFAULT_SERIES),
-        help="Default is sports only: NBA, NFL, MLB, NHL, and tennis series. Keep this bounded to protect memory and API usage.",
+        help="Default is tennis only: ATP/WTA/ITF match, game-total, and set-winner series. Keep this bounded to protect memory and API usage.",
     )
     max_markets = st.slider("Max markets", min_value=5, max_value=50, value=min(SETTINGS.max_markets, 50), step=5)
     discover = st.checkbox(
@@ -380,10 +387,10 @@ tab_cloud, tab_monitor, tab_signals, tab_nba, tab_tennis, tab_paper, tab_notes =
 )
 
 with tab_cloud:
-    st.subheader("Sports Cloud State")
+    st.subheader("Tennis Cloud State")
     st.caption(
         "Latest Supabase rows are replaced on each monitor sync, so old BTC/weather/index rows are not mixed into "
-        "the sports board. Actions are paper-trading recommendations, not financial advice."
+        "the tennis board. Actions are paper-trading recommendations, not financial advice."
     )
     cloud_heartbeat, cloud_rows, cloud_runs, cloud_enabled = load_cloud_state()
     if not cloud_enabled:
@@ -657,10 +664,64 @@ with tab_nba:
             )
 
 with tab_tennis:
-    st.subheader("Tennis Watchlist")
+    st.subheader("Live Tennis Matches")
     st.caption(
-        "Tennis is observation-only here. Kalshi tennis prices move quickly point-by-point, and this app does not "
-        "have an independent player model yet, so it ranks market quality instead of issuing buy signals."
+        "Reads Kalshi's live tennis page payload for current match cards, set/game score, live quote probability, "
+        "and paper-only buy/sell/watch guidance. The model is a score-clock heuristic, not financial advice."
+    )
+
+    with st.spinner("Loading Kalshi live tennis matches..."):
+        tennis_live_df, tennis_live_metadata = load_tennis_live_board()
+    live_cols = st.columns(5)
+    live_cols[0].metric("live events listed", int(tennis_live_metadata.get("live_events_listed") or 0))
+    live_cols[1].metric("cards loaded", int(tennis_live_metadata.get("cards_loaded") or 0))
+    live_cols[2].metric("live scores", int(tennis_live_metadata.get("live_scores_loaded") or 0))
+    live_cols[3].metric("rows", int(tennis_live_metadata.get("rows") or len(tennis_live_df)))
+    live_cols[4].metric("paper actionable", int(tennis_live_metadata.get("paper_actionable") or 0))
+    if tennis_live_df.empty:
+        st.info("No live tennis rows were parsed from Kalshi's current tennis page payload.")
+    else:
+        live_display_cols = [
+            "match",
+            "competition",
+            "live_status",
+            "sets",
+            "current_game",
+            "player",
+            "server",
+            "paper_action",
+            "paper_edge",
+            "score_fair_probability",
+            "kalshi_mid",
+            "yes_bid",
+            "yes_ask",
+            "no_bid",
+            "no_ask",
+            "spread",
+            "recent_event_volume",
+            "risk_flags",
+            "ticker",
+            "market_url",
+        ]
+        visible_live_cols = [col for col in live_display_cols if col in tennis_live_df.columns]
+        st.dataframe(
+            tennis_live_df[visible_live_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
+        )
+        st.download_button(
+            "Download live tennis CSV",
+            tennis_live_df[visible_live_cols].to_csv(index=False).encode("utf-8"),
+            file_name="tennis_live_board.csv",
+            mime="text/csv",
+        )
+
+    st.divider()
+    st.subheader("Tennis Market Quality Watchlist")
+    st.caption(
+        "This secondary scanner checks tennis contract liquidity and spread quality. It is useful when the live page "
+        "does not hydrate every match card, but it does not include full live score state."
     )
     tennis_cols = st.columns(6)
     tennis_scan_limit = tennis_cols[0].slider("Tennis scan cap", min_value=500, max_value=3000, value=2500, step=250)
