@@ -158,3 +158,5 @@ Action labels are paper-only:
 The tennis heuristic is deliberately simple and should be treated as a screening tool, not financial advice. It is useful for spotting mismatches between live score state and Kalshi's visible quotes, then doing human review before any real decision.
 
 The same tab includes near-real-time change alerts. Turn on `Auto-refresh alerts` to refresh the Streamlit page every 30, 60, or 120 seconds, then the app compares the latest live tennis snapshot against the previous one in your browser session. It highlights score, current game, server, price, fair-probability, edge, and paper-action changes that cross your selected thresholds. Use 60 seconds or slower on Streamlit Cloud because Kalshi may return HTTP 429 when the page is refreshed too aggressively.
+
+For real-money discipline, the Tennis tab also includes a manual buy queue. It stays tennis-only, applies an editable cash cap up to `$8`, limits per-match sizing, blocks missing-score or wide-spread rows, and shows an exit plan for any candidate. It still does not place trades; every real Kalshi order must be opened and confirmed manually by the user.

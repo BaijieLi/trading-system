@@ -37,6 +37,7 @@ from kalshi_trading_system.models.tennis_observer import (  # noqa: E402
 )
 from kalshi_trading_system.models.tennis_alerts import detect_tennis_live_changes  # noqa: E402
 from kalshi_trading_system.models.tennis_live import fetch_tennis_live_board  # noqa: E402
+from kalshi_trading_system.models.tennis_risk import tennis_cash_review_plan  # noqa: E402
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
     latest_signal_snapshot,
@@ -694,6 +695,29 @@ with tab_tennis:
         )
         st.caption(f"Auto-refresh is on. Next page refresh target: {tennis_refresh_seconds}s.")
 
+    st.info(
+        "Real-money guardrail: this app never places Kalshi orders. It can show tennis-only manual-review candidates "
+        "inside your cash cap, but you must open Kalshi and confirm any trade yourself."
+    )
+    bankroll_cols = st.columns(4)
+    tennis_cash_cap = bankroll_cols[0].number_input(
+        "Cash cap",
+        min_value=0.0,
+        max_value=8.0,
+        value=8.0,
+        step=1.0,
+        help="Hard planning cap for manual tennis candidates. The app will not allocate more than this.",
+    )
+    tennis_max_position = bankroll_cols[1].number_input(
+        "Max per match",
+        min_value=0.0,
+        max_value=8.0,
+        value=2.0,
+        step=0.5,
+    )
+    tennis_cash_edge = bankroll_cols[2].slider("Cash min edge", 0.03, 0.20, 0.06, 0.01)
+    tennis_cash_spread = bankroll_cols[3].slider("Cash max spread", 0.01, 0.12, 0.06, 0.01)
+
     with st.spinner("Loading Kalshi live tennis matches..."):
         tennis_live_df, tennis_live_metadata = load_tennis_live_board()
     live_cols = st.columns(5)
@@ -750,6 +774,49 @@ with tab_tennis:
             st.caption("No live tennis changes crossed your alert thresholds since the previous refresh.")
         else:
             st.caption("Live change alert baseline saved. Refresh again to detect score, price, action, and edge changes.")
+
+        manual_plans = tennis_cash_review_plan(
+            tennis_live_rows,
+            bankroll_dollars=float(tennis_cash_cap),
+            max_position_dollars=float(tennis_max_position),
+            min_edge=float(tennis_cash_edge),
+            max_spread=float(tennis_cash_spread),
+        )
+        actionable_plans = [
+            plan for plan in manual_plans if str(plan.get("review_action") or "").startswith("MANUAL_REVIEW")
+        ]
+        st.subheader("Tennis Manual Buy Queue")
+        if actionable_plans:
+            st.warning(
+                f"{len(actionable_plans)} candidate(s) passed the tennis-only, ${tennis_cash_cap:.0f} cash-cap checks. "
+                "Review manually before any real order."
+            )
+        else:
+            st.caption("No tennis candidate currently passes the cash-cap, edge, spread, and live-score checks.")
+        plan_cols = [
+            "match",
+            "player",
+            "review_action",
+            "side",
+            "suggested_contracts",
+            "estimated_cost",
+            "max_loss",
+            "entry_price",
+            "paper_edge",
+            "score_fair_probability",
+            "spread",
+            "reason",
+            "exit_plan",
+            "market_url",
+        ]
+        plans_df = pd.DataFrame(manual_plans)
+        if not plans_df.empty:
+            st.dataframe(
+                plans_df[[col for col in plan_cols if col in plans_df.columns]].head(12),
+                use_container_width=True,
+                hide_index=True,
+                column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
+            )
 
         live_display_cols = [
             "match",
