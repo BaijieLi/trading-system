@@ -196,7 +196,7 @@ def load_tennis_watchlist(
     return pd.DataFrame(rows), metadata
 
 
-@st.cache_data(ttl=10, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def load_tennis_live_board() -> tuple[pd.DataFrame, dict[str, object]]:
     rows, metadata = fetch_tennis_live_board()
     return pd.DataFrame(rows), metadata
@@ -678,8 +678,22 @@ with tab_tennis:
     live_cols[2].metric("live scores", int(tennis_live_metadata.get("live_scores_loaded") or 0))
     live_cols[3].metric("rows", int(tennis_live_metadata.get("rows") or len(tennis_live_df)))
     live_cols[4].metric("paper actionable", int(tennis_live_metadata.get("paper_actionable") or 0))
+    fetch_status = str(tennis_live_metadata.get("fetch_status") or "unknown")
+    if fetch_status == "rate_limited":
+        retry_after = tennis_live_metadata.get("retry_after") or "unknown"
+        st.warning(
+            "Kalshi is rate-limiting the live tennis page from Streamlit Cloud right now "
+            f"(HTTP 429, Retry-After: {retry_after}). The app will not crash; wait about a minute or use the "
+            "Tennis Market Quality Watchlist below while the live score page cools down."
+        )
+    elif fetch_status not in {"ok", "unknown"}:
+        st.warning(
+            "Kalshi live tennis page could not be loaded "
+            f"({fetch_status}: {tennis_live_metadata.get('error', 'unknown error')}). "
+            "The watchlist below still uses the public market API."
+        )
     if tennis_live_df.empty:
-        st.info("No live tennis rows were parsed from Kalshi's current tennis page payload.")
+        st.info("No live tennis rows are available from Kalshi's current tennis page payload.")
     else:
         live_display_cols = [
             "match",

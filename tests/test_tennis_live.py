@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 
+import requests
+
 from kalshi_trading_system.models.tennis_live import parse_tennis_live_payload
+from kalshi_trading_system.models import tennis_live
 
 
 def sample_tennis_html(include_live_score: bool = True) -> str:
@@ -112,3 +115,32 @@ def test_parse_tennis_live_payload_blocks_when_score_missing() -> None:
     assert metadata["live_scores_loaded"] == 0
     assert rows[0]["paper_action"] == "NO_TRADE"
     assert "NO_LIVE_SCORE" in str(rows[0]["risk_flags"])
+
+
+def test_fetch_tennis_live_board_returns_metadata_on_rate_limit(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 429
+        text = ""
+        headers = {"Retry-After": "60"}
+
+    monkeypatch.setattr(tennis_live.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    rows, metadata = tennis_live.fetch_tennis_live_board()
+
+    assert rows == []
+    assert metadata["fetch_status"] == "rate_limited"
+    assert metadata["http_status"] == 429
+    assert metadata["retry_after"] == "60"
+
+
+def test_fetch_tennis_live_board_returns_metadata_on_network_error(monkeypatch) -> None:
+    def raise_timeout(*args, **kwargs):
+        raise requests.Timeout("slow")
+
+    monkeypatch.setattr(tennis_live.requests, "get", raise_timeout)
+
+    rows, metadata = tennis_live.fetch_tennis_live_board()
+
+    assert rows == []
+    assert metadata["fetch_status"] == "network_error"
+    assert "Timeout" in str(metadata["error"])

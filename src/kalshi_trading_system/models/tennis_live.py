@@ -294,8 +294,34 @@ def parse_tennis_live_payload(html: str) -> tuple[list[dict[str, object]], dict[
 
 
 def fetch_tennis_live_board(url: str = KALSHI_TENNIS_URL, timeout: int = 20) -> tuple[list[dict[str, object]], dict[str, object]]:
-    response = requests.get(url, headers=HEADERS, timeout=timeout)
-    response.raise_for_status()
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=timeout)
+    except requests.RequestException as exc:
+        return [], {
+            "source": url,
+            "live_events_listed": 0,
+            "cards_loaded": 0,
+            "live_scores_loaded": 0,
+            "rows": 0,
+            "paper_actionable": 0,
+            "fetch_status": "network_error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    if response.status_code >= 400:
+        fetch_status = "rate_limited" if response.status_code == 429 else "http_error"
+        return [], {
+            "source": url,
+            "live_events_listed": 0,
+            "cards_loaded": 0,
+            "live_scores_loaded": 0,
+            "rows": 0,
+            "paper_actionable": 0,
+            "http_status": response.status_code,
+            "retry_after": response.headers.get("Retry-After", ""),
+            "fetch_status": fetch_status,
+            "error": f"Kalshi tennis page returned HTTP {response.status_code}.",
+        }
     rows, metadata = parse_tennis_live_payload(response.text)
     metadata["http_status"] = response.status_code
+    metadata["fetch_status"] = "ok"
     return rows, metadata
