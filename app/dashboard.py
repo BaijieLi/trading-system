@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -34,6 +35,7 @@ from kalshi_trading_system.models.tennis_observer import (  # noqa: E402
     TennisObserverConfig,
     discover_tennis_watchlist,
 )
+from kalshi_trading_system.models.tennis_alerts import detect_tennis_live_changes  # noqa: E402
 from kalshi_trading_system.models.tennis_live import fetch_tennis_live_board  # noqa: E402
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
@@ -669,6 +671,28 @@ with tab_tennis:
         "Reads Kalshi's live tennis page payload for current match cards, set/game score, live quote probability, "
         "and paper-only buy/sell/watch guidance. The model is a score-clock heuristic, not financial advice."
     )
+    alert_controls = st.columns([1.1, 1.1, 1.2, 1.2, 1])
+    auto_refresh_tennis = alert_controls[0].toggle(
+        "Auto-refresh alerts",
+        value=False,
+        help="Refreshes this Streamlit page on a timer. Keep it at 60s+ on Streamlit Cloud to avoid Kalshi 429 limits.",
+    )
+    tennis_refresh_seconds = alert_controls[1].selectbox("Refresh seconds", [30, 60, 120], index=1)
+    tennis_probability_threshold = alert_controls[2].slider("Probability alert", 0.01, 0.20, 0.05, 0.01)
+    tennis_edge_threshold = alert_controls[3].slider("Edge alert", 0.01, 0.20, 0.03, 0.01)
+    if alert_controls[4].button("Refresh now"):
+        load_tennis_live_board.clear()
+        st.rerun()
+    if auto_refresh_tennis:
+        components.html(
+            f"""
+            <script>
+            setTimeout(() => window.parent.location.reload(), {int(tennis_refresh_seconds) * 1000});
+            </script>
+            """,
+            height=0,
+        )
+        st.caption(f"Auto-refresh is on. Next page refresh target: {tennis_refresh_seconds}s.")
 
     with st.spinner("Loading Kalshi live tennis matches..."):
         tennis_live_df, tennis_live_metadata = load_tennis_live_board()
@@ -695,6 +719,38 @@ with tab_tennis:
     if tennis_live_df.empty:
         st.info("No live tennis rows are available from Kalshi's current tennis page payload.")
     else:
+        tennis_live_rows = tennis_live_df.to_dict("records")
+        previous_tennis_rows = st.session_state.get("previous_tennis_live_rows", [])
+        tennis_change_alerts = detect_tennis_live_changes(
+            previous_tennis_rows,
+            tennis_live_rows,
+            probability_threshold=float(tennis_probability_threshold),
+            edge_threshold=float(tennis_edge_threshold),
+        )
+        st.session_state["previous_tennis_live_rows"] = tennis_live_rows
+        if previous_tennis_rows and tennis_change_alerts:
+            st.warning(f"Detected {len(tennis_change_alerts)} live tennis change alert(s) since the previous refresh.")
+            alerts_df = pd.DataFrame(tennis_change_alerts)
+            alert_cols_display = [
+                "match",
+                "player",
+                "paper_action",
+                "paper_edge",
+                "score_fair_probability",
+                "changes",
+                "market_url",
+            ]
+            st.dataframe(
+                alerts_df[[col for col in alert_cols_display if col in alerts_df.columns]],
+                use_container_width=True,
+                hide_index=True,
+                column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
+            )
+        elif previous_tennis_rows:
+            st.caption("No live tennis changes crossed your alert thresholds since the previous refresh.")
+        else:
+            st.caption("Live change alert baseline saved. Refresh again to detect score, price, action, and edge changes.")
+
         live_display_cols = [
             "match",
             "competition",
