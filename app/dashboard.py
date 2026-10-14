@@ -31,6 +31,7 @@ from kalshi_trading_system.models.nba_market_edge import (  # noqa: E402
     discover_nba_market_edges,
     discover_nba_raw_board,
 )
+from kalshi_trading_system.models.refresh_policy import refresh_delay_seconds  # noqa: E402
 from kalshi_trading_system.models.tennis_observer import (  # noqa: E402
     TennisObserverConfig,
     discover_tennis_watchlist,
@@ -699,16 +700,6 @@ with tab_tennis:
     if alert_controls[4].button("Refresh now"):
         load_tennis_live_board.clear()
         st.rerun()
-    if auto_refresh_tennis:
-        components.html(
-            f"""
-            <script>
-            setTimeout(() => window.parent.location.reload(), {int(tennis_refresh_seconds) * 1000});
-            </script>
-            """,
-            height=0,
-        )
-        st.caption(f"Auto-refresh is on. Next page refresh target: {tennis_refresh_seconds}s.")
 
     st.info(
         "Real-money guardrail: this app never places Kalshi orders. It can show tennis-only manual-review candidates "
@@ -735,19 +726,66 @@ with tab_tennis:
 
     with st.spinner("Loading Kalshi live tennis matches..."):
         tennis_live_df, tennis_live_metadata = load_tennis_live_board()
+    fetch_status = str(tennis_live_metadata.get("fetch_status") or "unknown")
+    if fetch_status == "ok" and not tennis_live_df.empty:
+        st.session_state["last_good_tennis_live_rows"] = tennis_live_df.to_dict("records")
+        st.session_state["last_good_tennis_live_metadata"] = dict(tennis_live_metadata)
+    elif fetch_status == "rate_limited":
+        cached_rows = st.session_state.get("last_good_tennis_live_rows") or []
+        cached_metadata = st.session_state.get("last_good_tennis_live_metadata") or {}
+        if cached_rows:
+            original_retry_after = tennis_live_metadata.get("retry_after", "")
+            tennis_live_df = pd.DataFrame(cached_rows)
+            tennis_live_metadata = {
+                **dict(cached_metadata),
+                "fetch_status": "stale_rate_limited",
+                "live_fetch_status": "rate_limited",
+                "retry_after": original_retry_after,
+                "stale_from_cache": True,
+                "rows": len(cached_rows),
+            }
+            fetch_status = "stale_rate_limited"
+
+    if auto_refresh_tennis:
+        next_refresh_seconds = refresh_delay_seconds(
+            int(tennis_refresh_seconds),
+            fetch_status,
+            retry_after=tennis_live_metadata.get("retry_after"),
+        )
+        components.html(
+            f"""
+            <script>
+            setTimeout(() => window.parent.location.reload(), {next_refresh_seconds * 1000});
+            </script>
+            """,
+            height=0,
+        )
+        if next_refresh_seconds > int(tennis_refresh_seconds):
+            st.caption(
+                "Auto-refresh backoff is on because Kalshi rate-limited the live page. "
+                f"Next page refresh target: {next_refresh_seconds}s."
+            )
+        else:
+            st.caption(f"Auto-refresh is on. Next page refresh target: {next_refresh_seconds}s.")
+
     live_cols = st.columns(5)
     live_cols[0].metric("live events listed", int(tennis_live_metadata.get("live_events_listed") or 0))
     live_cols[1].metric("cards loaded", int(tennis_live_metadata.get("cards_loaded") or 0))
     live_cols[2].metric("live scores", int(tennis_live_metadata.get("live_scores_loaded") or 0))
     live_cols[3].metric("rows", int(tennis_live_metadata.get("rows") or len(tennis_live_df)))
     live_cols[4].metric("paper actionable", int(tennis_live_metadata.get("paper_actionable") or 0))
-    fetch_status = str(tennis_live_metadata.get("fetch_status") or "unknown")
     if fetch_status == "rate_limited":
         retry_after = tennis_live_metadata.get("retry_after") or "unknown"
         st.warning(
             "Kalshi is rate-limiting the live tennis page from Streamlit Cloud right now "
             f"(HTTP 429, Retry-After: {retry_after}). The app will not crash; wait about a minute or use the "
             "Tennis Market Quality Watchlist below while the live score page cools down."
+        )
+    elif fetch_status == "stale_rate_limited":
+        retry_after = tennis_live_metadata.get("retry_after") or "unknown"
+        st.warning(
+            "Kalshi rate-limited the live tennis page from Streamlit Cloud, so the app is showing the last successful "
+            f"live tennis snapshot from this session instead of an empty board (Retry-After: {retry_after})."
         )
     elif fetch_status not in {"ok", "unknown"}:
         st.warning(

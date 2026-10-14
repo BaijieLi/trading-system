@@ -162,3 +162,5 @@ The same tab includes near-real-time change alerts. Turn on `Auto-refresh alerts
 For real-money discipline, the Tennis tab also includes a manual buy queue. It stays tennis-only, applies an editable cash cap up to `$8`, limits per-match sizing, blocks missing-score or wide-spread rows, and shows an exit plan for any candidate. It still does not place trades; every real Kalshi order must be opened and confirmed manually by the user.
 
 If the user manually places a Kalshi order, the `Manual Kalshi Trade Journal` can record that entry and later review it against the same exit rules. This creates an audit trail of what the dashboard recommended, what the user confirmed manually, and when a sell threshold is later reached. The journal is local SQLite state for review and CSV export; it is not a broker connection.
+
+Kalshi may return HTTP 429 for the public live tennis page when Streamlit Cloud refreshes too aggressively. The Tennis tab now backs off to a slower refresh interval after rate limits and keeps the last successful live tennis snapshot in the browser session so the board does not drop to an empty table during a temporary cooldown.
