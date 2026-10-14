@@ -1,12 +1,17 @@
 from kalshi_trading_system.storage.sqlite_store import (
     latest_heartbeat,
     latest_signal_snapshot,
+    open_manual_trades,
     open_paper_trades,
+    recent_manual_exits,
+    recent_manual_trades,
     recent_paper_exits,
     recent_paper_trades,
     recent_monitor_runs,
     record_monitor_run,
     save_heartbeat,
+    save_manual_exit,
+    save_manual_trade,
     save_paper_exit,
     save_signals,
     save_trade,
@@ -104,3 +109,47 @@ def test_paper_trade_open_and_exit_flow(tmp_path):
     exits = recent_paper_exits(path=db_path)
     assert len(exits) == 1
     assert exits[0]["realized_pnl"] == 0.36
+
+
+def test_manual_trade_open_and_exit_flow(tmp_path):
+    db_path = tmp_path / "manual.sqlite3"
+    save_manual_trade(
+        {
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "ticker": "KXATPMATCH-TEST-ONE",
+            "side": "YES",
+            "contracts": 2,
+            "price": 0.55,
+            "notional": 1.10,
+            "reason": "manual user-confirmed entry",
+        },
+        path=db_path,
+    )
+
+    open_trades = open_manual_trades(path=db_path)
+    all_trades = recent_manual_trades(path=db_path)
+
+    assert len(open_trades) == 1
+    assert len(all_trades) == 1
+    assert open_trades[0]["ticker"] == "KXATPMATCH-TEST-ONE"
+
+    save_manual_exit(
+        {
+            "trade_id": open_trades[0]["id"],
+            "timestamp": "2026-01-01T01:00:00+00:00",
+            "ticker": "KXATPMATCH-TEST-ONE",
+            "side": "YES",
+            "contracts": 2,
+            "entry_price": 0.55,
+            "exit_price": 0.68,
+            "unrealized_pnl": 0.26,
+            "unrealized_roi": 0.2364,
+            "reason": "manual take profit",
+        },
+        path=db_path,
+    )
+
+    assert open_manual_trades(path=db_path) == []
+    exits = recent_manual_exits(path=db_path)
+    assert len(exits) == 1
+    assert exits[0]["realized_roi"] == 0.2364

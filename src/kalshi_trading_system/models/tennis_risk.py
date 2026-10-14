@@ -84,6 +84,7 @@ def tennis_cash_review_plan(
             {
                 "match": row.get("match", ""),
                 "player": row.get("player", ""),
+                "ticker": row.get("ticker", ""),
                 "review_action": review_action,
                 "side": side,
                 "suggested_contracts": contracts,

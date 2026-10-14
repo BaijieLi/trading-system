@@ -8,6 +8,7 @@ def test_tennis_cash_review_plan_sizes_candidates_inside_bankroll() -> None:
         {
             "match": "Player One vs Player Two",
             "player": "Player One",
+            "ticker": "KXTEST-ONE",
             "paper_action": "BUY_YES_PAPER",
             "paper_edge": 0.09,
             "score_fair_probability": 0.7,
@@ -22,6 +23,7 @@ def test_tennis_cash_review_plan_sizes_candidates_inside_bankroll() -> None:
     plans = tennis_cash_review_plan(rows, bankroll_dollars=8.0, max_position_dollars=2.0)
 
     assert plans[0]["review_action"] == "MANUAL_REVIEW_BUY_YES"
+    assert plans[0]["ticker"] == "KXTEST-ONE"
     assert plans[0]["side"] == "YES"
     assert plans[0]["suggested_contracts"] >= 1
     assert 0 < float(plans[0]["estimated_cost"]) <= 2.0

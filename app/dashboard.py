@@ -41,9 +41,14 @@ from kalshi_trading_system.models.tennis_risk import tennis_cash_review_plan  # 
 from kalshi_trading_system.storage.sqlite_store import (  # noqa: E402
     latest_heartbeat,
     latest_signal_snapshot,
+    open_manual_trades,
     open_paper_trades,
+    recent_manual_exits,
+    recent_manual_trades,
     recent_paper_exits,
     recent_monitor_runs,
+    save_manual_exit,
+    save_manual_trade,
     save_paper_exit,
     save_signals,
     save_trade,
@@ -250,6 +255,16 @@ def nba_edge_signature(nba_df: pd.DataFrame) -> tuple[tuple[object, ...], ...]:
         if column not in safe_df.columns:
             safe_df[column] = ""
     return tuple(tuple(row[column] for column in NBA_EDGE_ROW_FIELDS) for _, row in safe_df.iterrows())
+
+
+def tennis_rows_for_exit_review(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    signals: list[dict[str, object]] = []
+    for row in rows:
+        signal = dict(row)
+        signal["fair_probability"] = row.get("score_fair_probability")
+        signal["action"] = row.get("paper_action")
+        signals.append(signal)
+    return signals
 
 
 st.title("Kalshi Trading Radar")
@@ -796,6 +811,7 @@ with tab_tennis:
         plan_cols = [
             "match",
             "player",
+            "ticker",
             "review_action",
             "side",
             "suggested_contracts",
@@ -853,6 +869,132 @@ with tab_tennis:
             file_name="tennis_live_board.csv",
             mime="text/csv",
         )
+
+        st.divider()
+        st.subheader("Manual Kalshi Trade Journal")
+        st.caption(
+            "This journal only records trades you already placed manually on Kalshi. "
+            "It does not send orders, cancel orders, or move money."
+        )
+        manual_candidates = [
+            plan for plan in manual_plans if str(plan.get("review_action") or "").startswith("MANUAL_REVIEW")
+        ]
+        if manual_candidates:
+            selected_plan_index = st.selectbox(
+                "Candidate you manually executed on Kalshi",
+                list(range(len(manual_candidates))),
+                format_func=lambda index: (
+                    f"{manual_candidates[index]['match']} | {manual_candidates[index]['player']} | "
+                    f"{manual_candidates[index]['side']} @ {float(manual_candidates[index]['entry_price']):.2f}"
+                ),
+            )
+            selected_plan = manual_candidates[int(selected_plan_index)]
+            journal_cols = st.columns(3)
+            manual_contracts = journal_cols[0].number_input(
+                "Actual contracts",
+                min_value=1,
+                max_value=20,
+                value=max(1, int(selected_plan.get("suggested_contracts") or 1)),
+            )
+            manual_price = journal_cols[1].number_input(
+                "Actual fill price",
+                min_value=0.01,
+                max_value=0.99,
+                value=float(selected_plan.get("entry_price") or 0.5),
+                step=0.01,
+            )
+            manual_cost = round(float(manual_contracts) * float(manual_price), 2)
+            journal_cols[2].metric("Logged max loss", f"${manual_cost:.2f}")
+            if st.button("Record manual entry I already placed on Kalshi"):
+                save_manual_trade(
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "ticker": selected_plan["ticker"],
+                        "side": selected_plan["side"],
+                        "contracts": int(manual_contracts),
+                        "price": float(manual_price),
+                        "notional": manual_cost,
+                        "reason": (
+                            f"Manual Kalshi tennis entry from dashboard candidate. "
+                            f"{selected_plan['match']} / {selected_plan['player']}. "
+                            f"Queue reason: {selected_plan['reason']}. Exit plan: {selected_plan['exit_plan']}"
+                        ),
+                    }
+                )
+                st.success("Recorded manual Kalshi entry in the local journal.")
+        else:
+            st.caption("No passing manual-review candidate is available to record from the current tennis board.")
+
+        manual_open_positions = open_manual_trades(limit=50)
+        if manual_open_positions:
+            st.subheader("Manual Position Exit Review")
+            manual_exit_rows = evaluate_open_positions(
+                manual_open_positions,
+                tennis_rows_for_exit_review(tennis_live_rows),
+            )
+            manual_exit_df = pd.DataFrame(manual_exit_rows)
+            manual_exit_cols = [
+                "trade_id",
+                "ticker",
+                "side",
+                "contracts",
+                "action",
+                "entry_price",
+                "exit_price",
+                "unrealized_pnl",
+                "unrealized_roi",
+                "remaining_edge",
+                "side_probability",
+                "reason",
+            ]
+            st.dataframe(
+                manual_exit_df[[col for col in manual_exit_cols if col in manual_exit_df.columns]],
+                use_container_width=True,
+                hide_index=True,
+            )
+            manual_recommended_exits = (
+                manual_exit_df[manual_exit_df["action"].isin(SELL_ACTIONS)]
+                if "action" in manual_exit_df.columns
+                else pd.DataFrame()
+            )
+            if manual_recommended_exits.empty:
+                st.caption("No manual tennis position currently hits a modeled sell threshold.")
+            else:
+                selected_manual_exit_id = st.selectbox(
+                    "Recommended manual exit to record after you sell on Kalshi",
+                    manual_recommended_exits["trade_id"].astype(int).tolist(),
+                    format_func=lambda value: f"Manual trade #{value}",
+                )
+                selected_manual_exit = manual_recommended_exits[
+                    manual_recommended_exits["trade_id"] == selected_manual_exit_id
+                ].iloc[0].to_dict()
+                st.json(selected_manual_exit)
+                if st.button("Record manual exit I already placed on Kalshi"):
+                    save_manual_exit(selected_manual_exit)
+                    st.success("Recorded manual Kalshi exit in the local journal.")
+
+        manual_recent = recent_manual_trades(limit=20)
+        if manual_recent:
+            st.subheader("Recent Manual Kalshi Entries")
+            manual_recent_df = pd.DataFrame(manual_recent)
+            st.dataframe(manual_recent_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download manual entries CSV",
+                manual_recent_df.to_csv(index=False).encode("utf-8"),
+                file_name="manual_kalshi_entries.csv",
+                mime="text/csv",
+            )
+        manual_recent_exits = recent_manual_exits(limit=20)
+        if manual_recent_exits:
+            st.subheader("Recent Manual Kalshi Exits")
+            manual_recent_exits_df = pd.DataFrame(manual_recent_exits)
+            st.dataframe(manual_recent_exits_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download manual exits CSV",
+                manual_recent_exits_df.to_csv(index=False).encode("utf-8"),
+                file_name="manual_kalshi_exits.csv",
+                mime="text/csv",
+            )
 
     st.divider()
     st.subheader("Tennis Market Quality Watchlist")
