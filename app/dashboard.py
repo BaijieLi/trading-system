@@ -60,6 +60,8 @@ from kalshi_trading_system.utils.system import process_memory_mb  # noqa: E402
 
 st.set_page_config(page_title="Kalshi Trading Radar", page_icon="📈", layout="wide")
 
+TOP_SIGNAL_LIMIT = 10
+
 NBA_EDGE_ROW_FIELDS = (
     "away",
     "away_name",
@@ -283,7 +285,14 @@ with st.sidebar:
         value=",".join(DEFAULT_SERIES),
         help="Default is tennis only: ATP/WTA/ITF match, game-total, and set-winner series. Keep this bounded to protect memory and API usage.",
     )
-    max_markets = st.slider("Max markets", min_value=5, max_value=50, value=min(SETTINGS.max_markets, 50), step=5)
+    max_markets = st.slider(
+        "Top markets",
+        min_value=5,
+        max_value=10,
+        value=min(SETTINGS.max_markets, TOP_SIGNAL_LIMIT),
+        step=5,
+        help="Keep this at 10 for live sports review. Larger scans add noise and make rate limits more likely.",
+    )
     discover = st.checkbox(
         "Discover broader market universe",
         value=False,
@@ -292,25 +301,25 @@ with st.sidebar:
     discovery_scan_limit = st.slider(
         "Discovery scan limit",
         min_value=100,
-        max_value=3000,
-        value=min(SETTINGS.discovery_scan_limit, 1000),
+        max_value=1000,
+        value=min(SETTINGS.discovery_scan_limit, 500),
         step=100,
         disabled=not discover,
     )
     discovery_candidates = st.slider(
         "Discovery orderbooks",
-        min_value=20,
-        max_value=150,
-        value=min(SETTINGS.discovery_candidate_limit, 80),
+        min_value=10,
+        max_value=60,
+        value=min(SETTINGS.discovery_candidate_limit, 30),
         step=10,
         disabled=not discover,
     )
     discovery_final_limit = st.slider(
         "Discovery watchlist",
-        min_value=10,
-        max_value=100,
-        value=min(SETTINGS.discovery_final_limit, 50),
-        step=10,
+        min_value=5,
+        max_value=10,
+        value=min(SETTINGS.discovery_final_limit, TOP_SIGNAL_LIMIT),
+        step=5,
         disabled=not discover,
     )
     st.caption(f"Refresh target: {SETTINGS.refresh_seconds}s. Streamlit cache TTL: 10s.")
@@ -322,7 +331,7 @@ with st.sidebar:
         st.caption(f"Last heartbeat: {age_label(str(heartbeat['updated_at']))}")
     else:
         st.caption("No background monitor heartbeat yet.")
-    st.code("python scripts/monitor_markets.py --interval 30 --max-markets 50", language="bash")
+    st.code("python scripts/monitor_markets.py --interval 30 --max-markets 10", language="bash")
 
     st.header("Manual Fair Values")
     manual_text = st.text_area(
@@ -370,10 +379,11 @@ filtered = df[df["expected_value"] >= min_ev]
 if actions:
     filtered = filtered[filtered["action"].isin(actions)]
 filtered = filtered.sort_values(["action", "expected_value"], ascending=[True, False])
+top_filtered = filtered.head(TOP_SIGNAL_LIMIT)
 
 metric_cols = st.columns(6)
 metric_cols[0].metric("markets scanned", scanned)
-metric_cols[1].metric("visible signals", len(filtered))
+metric_cols[1].metric("top signals", len(top_filtered))
 metric_cols[2].metric("actionable", int(df["action"].isin(["BUY_YES_PAPER", "BUY_NO_PAPER"]).sum()))
 metric_cols[3].metric("wide/no-liq blocks", int((df["action"] == "NO_TRADE").sum()))
 metric_cols[4].metric("memory MB", f"{process_memory_mb():.0f}")
@@ -426,8 +436,9 @@ with tab_cloud:
         if cloud_rows:
             cloud_df = refresh_dataframe_market_urls(pd.DataFrame(cloud_rows))
             available_cols = [col for col in display_cols if col in cloud_df.columns]
+            cloud_top_df = cloud_df.head(TOP_SIGNAL_LIMIT)
             st.dataframe(
-                cloud_df[available_cols],
+                cloud_top_df[available_cols],
                 use_container_width=True,
                 hide_index=True,
                 column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
@@ -455,7 +466,7 @@ with tab_monitor:
     st.code(
         "cd /Users/libaijie/Downloads/Github_project/kalshi-trading-system\n"
         "source .venv/bin/activate\n"
-        "python scripts/monitor_markets.py --interval 30 --max-markets 50",
+        "python scripts/monitor_markets.py --interval 30 --max-markets 10",
         language="bash",
     )
 
@@ -469,8 +480,9 @@ with tab_monitor:
         if snapshot_rows:
             snapshot_df = refresh_dataframe_market_urls(pd.DataFrame(snapshot_rows))
             available_snapshot_cols = [col for col in display_cols if col in snapshot_df.columns]
+            snapshot_top_df = snapshot_df.head(TOP_SIGNAL_LIMIT)
             st.dataframe(
-                snapshot_df[available_snapshot_cols],
+                snapshot_top_df[available_snapshot_cols],
                 use_container_width=True,
                 hide_index=True,
                 column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
@@ -483,7 +495,7 @@ with tab_monitor:
         st.dataframe(pd.DataFrame(monitor_runs), use_container_width=True, hide_index=True)
 
 with tab_signals:
-    st.subheader("Fee/Spread-Adjusted Signals")
+    st.subheader("Fee/Spread-Adjusted Signals (Top 10)")
     if discover:
         st.caption(
             "Discovery mode: scanned {markets_seen} open markets, loaded {orderbooks_loaded} candidate orderbooks.".format(
@@ -493,7 +505,7 @@ with tab_signals:
         )
     available_display_cols = [col for col in display_cols if col in filtered.columns]
     st.dataframe(
-        filtered[available_display_cols],
+        top_filtered[available_display_cols],
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -502,12 +514,12 @@ with tab_signals:
     )
     st.download_button(
         "Download signals CSV",
-        filtered[available_display_cols].to_csv(index=False).encode("utf-8"),
+        top_filtered[available_display_cols].to_csv(index=False).encode("utf-8"),
         file_name="kalshi_signals.csv",
         mime="text/csv",
     )
     if st.button("Save snapshot to SQLite"):
-        save_signals(filtered.to_dict("records"))
+        save_signals(top_filtered.to_dict("records"))
         st.success("Saved signal snapshot to data/kalshi_paper.sqlite3")
 
 with tab_nba:
@@ -683,7 +695,7 @@ with tab_nba:
             )
 
 with tab_tennis:
-    st.subheader("Live Tennis Matches")
+    st.subheader("Live Tennis Matches (Top 10)")
     st.caption(
         "Reads Kalshi's live tennis page payload for current match cards, set/game score, live quote probability, "
         "and paper-only buy/sell/watch guidance. The model is a score-clock heuristic, not financial advice."
@@ -779,13 +791,14 @@ with tab_tennis:
         st.warning(
             "Kalshi is rate-limiting the live tennis page from Streamlit Cloud right now "
             f"(HTTP 429, Retry-After: {retry_after}). The app will not crash; wait about a minute or use the "
-            "Tennis Market Quality Watchlist below while the live score page cools down."
+            "Top 10 Tennis Market Quality Watchlist below. Treat this state as not suitable for fast live entry."
         )
     elif fetch_status == "stale_rate_limited":
         retry_after = tennis_live_metadata.get("retry_after") or "unknown"
         st.warning(
             "Kalshi rate-limited the live tennis page from Streamlit Cloud, so the app is showing the last successful "
-            f"live tennis snapshot from this session instead of an empty board (Retry-After: {retry_after})."
+            f"live tennis snapshot from this session instead of an empty board (Retry-After: {retry_after}). "
+            "Do not treat stale rows as instant trade data."
         )
     elif fetch_status not in {"ok", "unknown"}:
         st.warning(
@@ -838,10 +851,13 @@ with tab_tennis:
         actionable_plans = [
             plan for plan in manual_plans if str(plan.get("review_action") or "").startswith("MANUAL_REVIEW")
         ]
-        st.subheader("Tennis Manual Buy Queue")
+        top_manual_plans = manual_plans[:TOP_SIGNAL_LIMIT]
+        top_actionable_plans = actionable_plans[:TOP_SIGNAL_LIMIT]
+        st.subheader("Tennis Manual Buy Queue (Top 10)")
         if actionable_plans:
             st.warning(
-                f"{len(actionable_plans)} candidate(s) passed the tennis-only, ${tennis_cash_cap:.0f} cash-cap checks. "
+                f"{len(actionable_plans)} candidate(s) passed the tennis-only, ${tennis_cash_cap:.0f} cash-cap checks; "
+                f"showing the top {min(len(top_actionable_plans), TOP_SIGNAL_LIMIT)}. "
                 "Review manually before any real order."
             )
         else:
@@ -863,10 +879,10 @@ with tab_tennis:
             "exit_plan",
             "market_url",
         ]
-        plans_df = pd.DataFrame(manual_plans)
+        plans_df = pd.DataFrame(top_manual_plans)
         if not plans_df.empty:
             st.dataframe(
-                plans_df[[col for col in plan_cols if col in plans_df.columns]].head(12),
+                plans_df[[col for col in plan_cols if col in plans_df.columns]],
                 use_container_width=True,
                 hide_index=True,
                 column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
@@ -895,15 +911,16 @@ with tab_tennis:
             "market_url",
         ]
         visible_live_cols = [col for col in live_display_cols if col in tennis_live_df.columns]
+        tennis_live_top_df = tennis_live_df.head(TOP_SIGNAL_LIMIT)
         st.dataframe(
-            tennis_live_df[visible_live_cols],
+            tennis_live_top_df[visible_live_cols],
             use_container_width=True,
             hide_index=True,
             column_config={"market_url": st.column_config.LinkColumn("market_url", display_text="Open")},
         )
         st.download_button(
             "Download live tennis CSV",
-            tennis_live_df[visible_live_cols].to_csv(index=False).encode("utf-8"),
+            tennis_live_top_df[visible_live_cols].to_csv(index=False).encode("utf-8"),
             file_name="tennis_live_board.csv",
             mime="text/csv",
         )
@@ -916,7 +933,7 @@ with tab_tennis:
         )
         manual_candidates = [
             plan for plan in manual_plans if str(plan.get("review_action") or "").startswith("MANUAL_REVIEW")
-        ]
+        ][:TOP_SIGNAL_LIMIT]
         if manual_candidates:
             selected_plan_index = st.selectbox(
                 "Candidate you manually executed on Kalshi",
@@ -1035,15 +1052,15 @@ with tab_tennis:
             )
 
     st.divider()
-    st.subheader("Tennis Market Quality Watchlist")
+    st.subheader("Tennis Market Quality Watchlist (Top 10)")
     st.caption(
         "This secondary scanner checks tennis contract liquidity and spread quality. It is useful when the live page "
         "does not hydrate every match card, but it does not include full live score state."
     )
     tennis_cols = st.columns(6)
-    tennis_scan_limit = tennis_cols[0].slider("Tennis scan cap", min_value=500, max_value=3000, value=2500, step=250)
-    tennis_candidates = tennis_cols[1].slider("Tennis candidates", min_value=20, max_value=160, value=120, step=20)
-    tennis_orderbooks = tennis_cols[2].slider("Tennis orderbooks", min_value=10, max_value=80, value=40, step=10)
+    tennis_scan_limit = tennis_cols[0].slider("Tennis scan cap", min_value=200, max_value=1000, value=500, step=100)
+    tennis_candidates = tennis_cols[1].slider("Tennis candidates", min_value=10, max_value=60, value=30, step=10)
+    tennis_orderbooks = tennis_cols[2].slider("Tennis orderbooks", min_value=5, max_value=20, value=10, step=5)
     tennis_spread = tennis_cols[3].slider("Tennis max spread", min_value=0.01, max_value=0.15, value=0.06, step=0.01)
     tennis_min_volume = tennis_cols[4].number_input("Min volume", min_value=0.0, max_value=100000.0, value=1000.0, step=500.0)
     tennis_min_oi = tennis_cols[5].number_input("Min open interest", min_value=0.0, max_value=100000.0, value=1000.0, step=500.0)
@@ -1088,8 +1105,9 @@ with tab_tennis:
             "hub_url",
         ]
         visible_tennis_cols = [col for col in tennis_cols_display if col in tennis_df.columns]
+        tennis_top_df = tennis_df.head(TOP_SIGNAL_LIMIT)
         st.dataframe(
-            tennis_df[visible_tennis_cols],
+            tennis_top_df[visible_tennis_cols],
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -1099,7 +1117,7 @@ with tab_tennis:
         )
         st.download_button(
             "Download tennis watchlist CSV",
-            tennis_df[visible_tennis_cols].to_csv(index=False).encode("utf-8"),
+            tennis_top_df[visible_tennis_cols].to_csv(index=False).encode("utf-8"),
             file_name="tennis_watchlist.csv",
             mime="text/csv",
         )

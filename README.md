@@ -17,6 +17,7 @@ This project is intentionally conservative. It does **not** place real orders. I
 - Tracks memory usage so it does not overload your computer.
 - Saves signal snapshots, paper trades, and paper exits to SQLite.
 - Defaults to tennis markets: ATP/WTA/ITF match, set-winner, and game-total series.
+- Keeps the main sports/tennis review surface intentionally small: Top 10 rows only by default.
 - Includes an NBA live scoreboard tab that uses ESPN as the primary live source and compares it against NBA liveData to flag stale provider responses.
 - Adds a transparent NBA score-clock win probability heuristic for live games, finals, and scheduled games.
 - Includes a live tennis tab that reads Kalshi's tennis page payload for current matches, set/game score, YES/NO quotes, and paper-only action labels.
@@ -36,7 +37,7 @@ cd /Users/libaijie/Downloads/Github_project/kalshi-trading-system
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python scripts/scan_markets.py --max-markets 20
+python scripts/scan_markets.py --max-markets 10
 streamlit run app/dashboard.py --server.port 8504
 ```
 
@@ -45,9 +46,9 @@ To scan a broader open-market universe and rank a candidate watchlist:
 ```bash
 python scripts/scan_markets.py \
   --discover \
-  --discovery-scan-limit 1000 \
-  --discovery-candidates 80 \
-  --discovery-final-limit 50
+  --discovery-scan-limit 500 \
+  --discovery-candidates 30 \
+  --discovery-final-limit 10
 ```
 
 Discovery mode first scans open market metadata, filters out low-liquidity markets, loads orderbooks only for the strongest candidates, and then ranks them with a conservative score based on liquidity, spread/quote quality, and paper edge. It still does not mean "buy"; it means "worth watching first."
@@ -60,19 +61,19 @@ By default, the monitor watches only tennis series so BTC/weather/index rows do 
 ```bash
 cd /Users/libaijie/Downloads/Github_project/kalshi-trading-system
 source .venv/bin/activate
-python scripts/monitor_markets.py --interval 30 --max-markets 50
+python scripts/monitor_markets.py --interval 30 --max-markets 10
 ```
 
 For a broader watchlist monitor, use a slower interval so API usage stays reasonable:
 
 ```bash
-python scripts/monitor_markets.py --discover --interval 120 --discovery-scan-limit 1000 --discovery-candidates 80
+python scripts/monitor_markets.py --discover --interval 120 --discovery-scan-limit 500 --discovery-candidates 30 --discovery-final-limit 10
 ```
 
 For a local Mac run where you want to reduce sleep interruptions while the lid stays open:
 
 ```bash
-caffeinate -dimsu python scripts/monitor_markets.py --interval 30 --max-markets 50
+caffeinate -dimsu python scripts/monitor_markets.py --interval 30 --max-markets 10
 ```
 
 The monitor saves every scan to `data/kalshi_paper.sqlite3`, writes a latest CSV to `outputs/kalshi_latest_signals.csv`, and updates a heartbeat that appears in the Streamlit `Monitor` tab.
@@ -105,11 +106,11 @@ The monitor replaces `market_state` every scan, samples `market_observations` ev
 
 ```text
 PAPER_TRADING_ONLY=true
-MAX_MARKETS=50
+MAX_MARKETS=10
 REFRESH_SECONDS=10
-DISCOVERY_SCAN_LIMIT=1000
-DISCOVERY_CANDIDATE_LIMIT=80
-DISCOVERY_FINAL_LIMIT=50
+DISCOVERY_SCAN_LIMIT=500
+DISCOVERY_CANDIDATE_LIMIT=30
+DISCOVERY_FINAL_LIMIT=10
 MAX_RISK_PER_TRADE_PCT=1.0
 MAX_DAILY_LOSS_PCT=3.0
 SUPABASE_ENABLED=false
@@ -163,4 +164,6 @@ For real-money discipline, the Tennis tab also includes a manual buy queue. It s
 
 If the user manually places a Kalshi order, the `Manual Kalshi Trade Journal` can record that entry and later review it against the same exit rules. This creates an audit trail of what the dashboard recommended, what the user confirmed manually, and when a sell threshold is later reached. The journal is local SQLite state for review and CSV export; it is not a broker connection.
 
-Kalshi may return HTTP 429 for the public live tennis page when Streamlit Cloud refreshes too aggressively. The Tennis tab now backs off to a slower refresh interval after rate limits and keeps the last successful live tennis snapshot in the browser session so the board does not drop to an empty table during a temporary cooldown.
+Kalshi may return HTTP 429 for the public live tennis page when Streamlit Cloud refreshes too aggressively. The Tennis tab now backs off to a slower refresh interval after rate limits and keeps the last successful live tennis snapshot in the browser session so the board does not drop to an empty table during a temporary cooldown. A rate-limited or stale snapshot should not be used for fast live entry decisions.
+
+The app intentionally shows only the Top 10 live tennis rows, manual-review candidates, and secondary watchlist rows. This reduces noise, lowers the chance of rate limiting, and makes it harder to mistake broad scanning for an actionable live-trading feed.
